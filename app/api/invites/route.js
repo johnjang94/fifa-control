@@ -54,7 +54,7 @@ export function OPTIONS() {
 export async function POST(request) {
   try {
     const formData = await request.formData();
-    const payload = parseInvitePayload(formData);
+    const payload = await parseInvitePayload(formData);
     const { isFull } = await getInviteState();
 
     const doc = await getDb().collection(COLLECTION).add({
@@ -67,6 +67,7 @@ export async function POST(request) {
     return json({
       ok: true,
       id: doc.id,
+      qrToken: doc.id,
       isWaitlist: isFull,
     });
   } catch (error) {
