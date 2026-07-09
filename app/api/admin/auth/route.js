@@ -23,10 +23,13 @@ export async function POST(request) {
   try {
     const payload = parseAdminAuthPayload(await request.json());
     const db = getDb();
-    const ok = await verifyAdminIdentity(db, payload);
+    const identity = await verifyAdminIdentity(db, payload);
 
-    if (!ok && process.env.ADMIN_ACCESS_KEY) {
-      return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    if (!identity.ok && process.env.ADMIN_ACCESS_KEY) {
+      return json(
+        { ok: false, error: identity.error ?? "Unauthorized" },
+        { status: 401 },
+      );
     }
 
     const session = await createAdminSession(db, payload);
@@ -36,4 +39,3 @@ export async function POST(request) {
     return json({ ok: false, error: message }, { status: 400 });
   }
 }
-
