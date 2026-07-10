@@ -57,6 +57,7 @@ export async function GET(request) {
       firstName: String(data.firstName ?? ""),
       lastName: String(data.lastName ?? ""),
       phoneNumber: String(data.phoneNumber ?? ""),
+      profilePhotoUrl: typeof data.profilePhotoUrl === "string" ? data.profilePhotoUrl : "",
       rsvp: String(data.rsvp ?? "Going"),
     },
   });
