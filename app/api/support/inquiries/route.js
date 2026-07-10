@@ -82,7 +82,7 @@ export async function POST(request) {
       payload.contactName ||
       inviteName ||
       invitePhone ||
-      "이름 미확인";
+      "Unknown guest";
     const customerPhotoUrl = invite?.profilePhotoUrl ?? null;
     const phoneNumber = payload.contactPhoneNumber || invitePhone || payload.inviteToken || "";
 
@@ -203,16 +203,16 @@ export async function POST(request) {
 }
 
 function buildSupportSmsMessage({ customerName, humanRequested, requestType }) {
-  const displayName = customerName || "이름 미확인";
+  const displayName = customerName || "Unknown guest";
   if (requestType === "food_request") {
-    return `host 알림: ${displayName} 님이 support 채널에서 음식 반입 요청을 보냈습니다.`;
+    return `Host alert: ${displayName} requested to bring food in the support channel.`;
   }
 
   if (humanRequested) {
-    return `host 알림: ${displayName} 님이 support 채널에서 실 상담을 요청했습니다.`;
+    return `Host alert: ${displayName} requested a live conversation in the support channel.`;
   }
 
-  return `host 알림: ${displayName} 님이 support 채널에서 챗봇 상담 중입니다.`;
+  return `Host alert: ${displayName} is chatting with the support bot.`;
 }
 
 async function maybeSendSupportSms({
