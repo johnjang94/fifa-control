@@ -44,6 +44,23 @@ async function getInviteState() {
   return { inviteCount, capacity, isFull, snapshot };
 }
 
+async function generateUniqueBarcode(db) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const barcode = String(Math.floor(Math.random() * 100000)).padStart(5, "0");
+    const snapshot = await db
+      .collection(COLLECTION)
+      .where("barcode", "==", barcode)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return barcode;
+    }
+  }
+
+  throw new Error("Unable to allocate a barcode. Please try again.");
+}
+
 export function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
@@ -56,9 +73,12 @@ export async function POST(request) {
     const formData = await request.formData();
     const payload = await parseInvitePayload(formData);
     const { isFull } = await getInviteState();
+    const db = getDb();
+    const barcode = await generateUniqueBarcode(db);
 
-    const doc = await getDb().collection(COLLECTION).add({
+    const doc = await db.collection(COLLECTION).add({
       ...payload,
+      barcode,
       createdAt: new Date(),
       source: "guest-home",
       status: isFull ? "waitlist" : "confirmed",
@@ -68,6 +88,7 @@ export async function POST(request) {
       ok: true,
       id: doc.id,
       qrToken: doc.id,
+      barcode,
       isWaitlist: isFull,
     });
   } catch (error) {
