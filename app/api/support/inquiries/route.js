@@ -46,37 +46,43 @@ export async function GET(request) {
   });
 }
 
-async function lookupInvite(db, inviteToken) {
-  const safeToken = String(inviteToken ?? "").trim();
-  if (!safeToken) {
-    return null;
+async function lookupInvite(db, identifiers = []) {
+  for (const identifier of identifiers) {
+    const safeValue = String(identifier ?? "").trim();
+    if (!safeValue) {
+      continue;
+    }
+
+    const directSnapshot = await db.collection(INVITE_COLLECTION).doc(safeValue).get();
+    if (directSnapshot.exists) {
+      return toInviteRequest(directSnapshot.id, directSnapshot.data() ?? {});
+    }
+
+    const phoneNumber = safeValue.replace(/\D/g, "");
+    if (!phoneNumber) {
+      continue;
+    }
+
+    const snapshot = await db
+      .collection(INVITE_COLLECTION)
+      .where("phoneNumber", "==", phoneNumber)
+      .limit(1)
+      .get();
+
+    if (!snapshot.empty) {
+      const doc = snapshot.docs[0];
+      return toInviteRequest(doc.id, doc.data());
+    }
   }
 
-  const directSnapshot = await db.collection(INVITE_COLLECTION).doc(safeToken).get();
-  if (directSnapshot.exists) {
-    return toInviteRequest(directSnapshot.id, directSnapshot.data() ?? {});
-  }
-
-  const phoneNumber = safeToken.replace(/\D/g, "");
-  const snapshot = await db
-    .collection(INVITE_COLLECTION)
-    .where("phoneNumber", "==", phoneNumber)
-    .limit(1)
-    .get();
-
-  if (snapshot.empty) {
-    return null;
-  }
-
-  const doc = snapshot.docs[0];
-  return toInviteRequest(doc.id, doc.data());
+  return null;
 }
 
 export async function POST(request) {
   try {
     const payload = parseSupportPayload(await request.json());
     const db = getDb();
-    const invite = await lookupInvite(db, payload.inviteToken);
+    const invite = await lookupInvite(db, [payload.inviteToken, payload.contactPhoneNumber]);
     const inviteName = invite ? `${invite.firstName} ${invite.lastName}`.trim() : "";
     const invitePhone = invite?.phoneNumber || "";
     const customerName = payload.contactName || inviteName || invitePhone || "Unknown guest";
@@ -148,6 +154,7 @@ export async function POST(request) {
       customerPhotoUrl,
       phoneNumber,
       inviteToken: payload.inviteToken || phoneNumber,
+      contactPhoneNumber: payload.contactPhoneNumber || "",
       question: existingQuestion || currentMessage,
       answer: reply.answer,
       status: payload.wantsHumanSupport ? "human requested" : existingStatus || "open",
@@ -172,6 +179,8 @@ export async function POST(request) {
         requestType: payload.requestType,
         humanRequested: payload.wantsHumanSupport,
         requestReason,
+        topic: reply.topic,
+        suggestedAction: reply.suggestedAction,
         isNewTicket: true,
         existingStatus: "open",
         acknowledgedAt: null,
@@ -193,6 +202,8 @@ export async function POST(request) {
       requestType: payload.requestType,
       humanRequested: payload.wantsHumanSupport,
       requestReason,
+      topic: reply.topic,
+      suggestedAction: reply.suggestedAction,
       isNewTicket: false,
       existingStatus,
       acknowledgedAt: existingHumanAcknowledgedAt,
@@ -211,14 +222,26 @@ export async function POST(request) {
   }
 }
 
-function buildSupportSmsMessage({ customerName, humanRequested, requestType, requestReason }) {
+function buildSupportSmsMessage({
+  customerName,
+  humanRequested,
+  requestType,
+  requestReason,
+  topic,
+  suggestedAction,
+}) {
   const displayName = typeof customerName === "string" ? customerName.trim() : "";
   const subject = displayName ? `${displayName} ` : "";
   const reason = typeof requestReason === "string" ? requestReason.trim() : "";
   const reasonSuffix = reason ? ` Reason: ${reason.slice(0, 140)}` : "";
 
-  if (requestType === "food_request") {
-    return `Host alert: ${subject}requested to bring food in the support channel.${reasonSuffix}`;
+  if (
+    requestType === "food_request" ||
+    topic === "bring_food" ||
+    suggestedAction === "food_request_confirmation" ||
+    suggestedAction === "food_request_form"
+  ) {
+    return `Host alert: ${subject}requested to bring food, snacks, or drinks in the support channel.${reasonSuffix}`;
   }
 
   if (humanRequested) {
@@ -233,6 +256,8 @@ async function maybeSendSupportSms({
   requestType,
   humanRequested,
   requestReason,
+  topic,
+  suggestedAction,
   isNewTicket,
   existingStatus,
   acknowledgedAt,
@@ -241,6 +266,9 @@ async function maybeSendSupportSms({
   const hasHumanAlert = Boolean(humanRequestedAt);
   const shouldNotify =
     requestType === "food_request" ||
+    topic === "bring_food" ||
+    suggestedAction === "food_request_confirmation" ||
+    suggestedAction === "food_request_form" ||
     isNewTicket ||
     (humanRequested && !acknowledgedAt && !hasHumanAlert && existingStatus !== "human requested");
 
@@ -255,6 +283,8 @@ async function maybeSendSupportSms({
         requestType,
         humanRequested,
         requestReason,
+        topic,
+        suggestedAction,
       }),
     );
   } catch {

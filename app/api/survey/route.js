@@ -23,33 +23,34 @@ function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-async function findInviteDoc(db, inviteToken) {
-  const safeToken = normalizeString(inviteToken);
-  if (!safeToken) {
-    return null;
+async function findInviteDoc(db, inviteToken, contactPhoneNumber = "") {
+  const candidates = [inviteToken, contactPhoneNumber]
+    .map((value) => normalizeString(value))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    const directSnapshot = await db.collection(COLLECTION).doc(candidate).get();
+    if (directSnapshot.exists) {
+      return directSnapshot.ref;
+    }
+
+    const phoneNumber = candidate.replace(/\D/g, "");
+    if (!phoneNumber) {
+      continue;
+    }
+
+    const phoneSnapshot = await db
+      .collection(COLLECTION)
+      .where("phoneNumber", "==", phoneNumber)
+      .limit(1)
+      .get();
+
+    if (!phoneSnapshot.empty) {
+      return phoneSnapshot.docs[0].ref;
+    }
   }
 
-  const directSnapshot = await db.collection(COLLECTION).doc(safeToken).get();
-  if (directSnapshot.exists) {
-    return directSnapshot.ref;
-  }
-
-  const phoneNumber = safeToken.replace(/\D/g, "");
-  if (!phoneNumber) {
-    return null;
-  }
-
-  const phoneSnapshot = await db
-    .collection(COLLECTION)
-    .where("phoneNumber", "==", phoneNumber)
-    .limit(1)
-    .get();
-
-  if (phoneSnapshot.empty) {
-    return null;
-  }
-
-  return phoneSnapshot.docs[0].ref;
+  return null;
 }
 
 export function OPTIONS() {
@@ -60,6 +61,7 @@ export async function POST(request) {
   try {
     const payload = await request.json();
     const inviteToken = normalizeString(payload?.inviteToken);
+    const contactPhoneNumber = normalizeString(payload?.contactPhoneNumber);
     const howDidYouKnow = normalizeString(payload?.howDidYouKnow);
     const referredBy = normalizeString(payload?.referredBy);
     const dietaryRestrictions = normalizeString(payload?.dietaryRestrictions);
@@ -86,7 +88,7 @@ export async function POST(request) {
     }
 
     const db = getDb();
-    const docRef = await findInviteDoc(db, inviteToken);
+    const docRef = await findInviteDoc(db, inviteToken, contactPhoneNumber);
 
     if (!docRef) {
       return json({ ok: false, error: "Invite not found." }, { status: 404 });
