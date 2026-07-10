@@ -8,7 +8,7 @@ const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-admin-key",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
 };
 
 function json(body, init) {
@@ -77,6 +77,31 @@ export async function POST(request) {
   }
 }
 
+async function findInviteDoc(db, inviteToken) {
+  const safeToken = String(inviteToken ?? "").trim();
+
+  if (!safeToken) {
+    return null;
+  }
+
+  const directSnapshot = await db.collection(COLLECTION).doc(safeToken).get();
+  if (directSnapshot.exists) {
+    return directSnapshot.ref;
+  }
+
+  const querySnapshot = await db
+    .collection(COLLECTION)
+    .where("phoneNumber", "==", safeToken.replace(/\D/g, ""))
+    .limit(1)
+    .get();
+
+  if (querySnapshot.empty) {
+    return null;
+  }
+
+  return querySnapshot.docs[0].ref;
+}
+
 export async function GET(request) {
   const { inviteCount, capacity, isFull, snapshot } = await getInviteState();
 
@@ -104,4 +129,44 @@ export async function GET(request) {
       .slice(0, 100)
       .map((doc) => toInviteRequest(doc.id, doc.data())),
   });
+}
+
+export async function PATCH(request) {
+  try {
+    const payload = await request.json();
+    const inviteToken = String(payload?.inviteToken ?? "").trim();
+    const rsvp = String(payload?.rsvp ?? "").trim();
+
+    if (!inviteToken) {
+      return json({ ok: false, error: "inviteToken is required." }, { status: 400 });
+    }
+
+    if (!["Going", "maybe", "not going"].includes(rsvp)) {
+      return json({ ok: false, error: "Invalid RSVP value." }, { status: 400 });
+    }
+
+    const db = getDb();
+    const docRef = await findInviteDoc(db, inviteToken);
+
+    if (!docRef) {
+      return json({ ok: false, error: "Invite not found." }, { status: 404 });
+    }
+
+    await docRef.set(
+      {
+        rsvp,
+        updatedAt: new Date(),
+      },
+      { merge: true },
+    );
+
+    const snapshot = await docRef.get();
+    return json({
+      ok: true,
+      user: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to update RSVP.";
+    return json({ ok: false, error: message }, { status: 400 });
+  }
 }

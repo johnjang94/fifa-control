@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../lib/firestore";
 import {
-  buildSupportThread,
+  buildAutoReply,
   parseSupportPayload,
   toInquiryItem,
 } from "../../../../lib/inquiry";
@@ -46,13 +46,20 @@ export async function GET(request) {
 }
 
 async function lookupInvite(db, inviteToken) {
-  if (!inviteToken) {
+  const safeToken = String(inviteToken ?? "").trim();
+  if (!safeToken) {
     return null;
   }
 
+  const directSnapshot = await db.collection(INVITE_COLLECTION).doc(safeToken).get();
+  if (directSnapshot.exists) {
+    return toInviteRequest(directSnapshot.id, directSnapshot.data() ?? {});
+  }
+
+  const phoneNumber = safeToken.replace(/\D/g, "");
   const snapshot = await db
     .collection(INVITE_COLLECTION)
-    .where("phoneNumber", "==", inviteToken)
+    .where("phoneNumber", "==", phoneNumber)
     .limit(1)
     .get();
 
@@ -70,9 +77,11 @@ export async function POST(request) {
     const db = getDb();
     const invite = await lookupInvite(db, payload.inviteToken);
     const customerName =
-      invite ? `${invite.firstName} ${invite.lastName}`.trim() : "Guest";
+      payload.contactName ||
+      (invite ? `${invite.firstName} ${invite.lastName}`.trim() : "") ||
+      "Guest";
     const customerPhotoUrl = invite?.profilePhotoUrl ?? null;
-    const phoneNumber = invite?.phoneNumber ?? payload.inviteToken ?? "";
+    const phoneNumber = payload.contactPhoneNumber || invite?.phoneNumber || payload.inviteToken || "";
 
     let docRef = null;
     let existingThread = [];
@@ -102,11 +111,26 @@ export async function POST(request) {
       }
     }
 
-    const nextThread = buildSupportThread({
-      existingThread,
-      message: payload.message,
-      customerName,
-    });
+    const reply = payload.requestType === "food_request"
+      ? {
+          topic: "food_request_submission",
+          answer: "Thanks. Your request has been sent to the admin.",
+          suggestedAction: "none",
+        }
+      : buildAutoReply(payload.message, customerName, existingThread);
+    const nextThread = [
+      ...existingThread,
+      {
+        role: "customer",
+        message: payload.message,
+        createdAt: new Date().toISOString(),
+      },
+      {
+        role: "assistant",
+        message: reply.answer,
+        createdAt: new Date().toISOString(),
+      },
+    ];
     const currentMessage = String(payload.message ?? "");
 
     const inquiryData = {
@@ -115,13 +139,15 @@ export async function POST(request) {
       phoneNumber,
       inviteToken: payload.inviteToken || phoneNumber,
       question: existingQuestion || currentMessage,
-      answer: nextThread.filter((line) => line.role === "assistant").at(-1)?.message ?? "",
+      answer: reply.answer,
       status: payload.wantsHumanSupport ? "human requested" : existingStatus || "open",
       currentAgent: existingCurrentAgent || "Unassigned",
       assignedTo: existingAssignedTo || "Unassigned",
       humanRequestedAt:
         existingHumanRequestedAt ?? (payload.wantsHumanSupport ? new Date() : null),
       humanAcknowledgedAt: existingHumanAcknowledgedAt ?? null,
+      topic: reply.topic,
+      suggestedAction: reply.suggestedAction,
       thread: nextThread,
       updatedAt: new Date(),
       createdAt: existingCreatedAt ?? new Date(),
@@ -132,34 +158,52 @@ export async function POST(request) {
       const inquiry = toInquiryItem(created.id, inquiryData);
       await maybeSendSupportSms({
         customerName,
+        requestType: payload.requestType,
         humanRequested: payload.wantsHumanSupport,
         isNewTicket: true,
         existingStatus: "open",
         acknowledgedAt: null,
         humanRequestedAt: inquiryData.humanRequestedAt,
       });
-      return json({ ok: true, inquiry, ticketId: created.id });
+      return json({
+        ok: true,
+        inquiry,
+        ticketId: created.id,
+        topic: reply.topic,
+        suggestedAction: reply.suggestedAction,
+      });
     }
 
     await docRef.set(inquiryData, { merge: true });
     const inquiry = toInquiryItem(payload.ticketId, inquiryData);
     await maybeSendSupportSms({
       customerName,
+      requestType: payload.requestType,
       humanRequested: payload.wantsHumanSupport,
       isNewTicket: false,
       existingStatus,
       acknowledgedAt: existingHumanAcknowledgedAt,
       humanRequestedAt: existingHumanRequestedAt,
     });
-    return json({ ok: true, inquiry, ticketId: payload.ticketId });
+    return json({
+      ok: true,
+      inquiry,
+      ticketId: payload.ticketId,
+      topic: reply.topic,
+      suggestedAction: reply.suggestedAction,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save inquiry.";
     return json({ ok: false, error: message }, { status: 400 });
   }
 }
 
-function buildSupportSmsMessage({ customerName, humanRequested }) {
+function buildSupportSmsMessage({ customerName, humanRequested, requestType }) {
   const displayName = customerName || "누군가";
+  if (requestType === "food_request") {
+    return `지원 알림: ${displayName} 님이 음식 반입 요청을 보냈습니다.`;
+  }
+
   if (humanRequested) {
     return `지원 알림: ${displayName} 님이 실 상담을 요청했습니다.`;
   }
@@ -169,6 +213,7 @@ function buildSupportSmsMessage({ customerName, humanRequested }) {
 
 async function maybeSendSupportSms({
   customerName,
+  requestType,
   humanRequested,
   isNewTicket,
   existingStatus,
@@ -177,6 +222,7 @@ async function maybeSendSupportSms({
 }) {
   const hasHumanAlert = Boolean(humanRequestedAt);
   const shouldNotify =
+    requestType === "food_request" ||
     isNewTicket ||
     (humanRequested && !acknowledgedAt && !hasHumanAlert && existingStatus !== "human requested");
 
@@ -188,6 +234,7 @@ async function maybeSendSupportSms({
     await sendSupportSms(
       buildSupportSmsMessage({
         customerName,
+        requestType,
         humanRequested,
       }),
     );
