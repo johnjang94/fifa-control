@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/firestore";
 import {
   buildAutoReply,
+  buildSupportReason,
   parseSupportPayload,
   toInquiryItem,
 } from "../../../../lib/inquiry";
@@ -117,6 +118,8 @@ export async function POST(request) {
       }
     }
 
+    const requestReason = await buildSupportReason(payload.message, customerName, existingThread);
+
     const reply =
       payload.requestType === "food_request"
         ? {
@@ -155,6 +158,7 @@ export async function POST(request) {
       humanAcknowledgedAt: existingHumanAcknowledgedAt ?? null,
       topic: reply.topic,
       suggestedAction: reply.suggestedAction,
+      requestReason,
       thread: nextThread,
       updatedAt: new Date(),
       createdAt: existingCreatedAt ?? new Date(),
@@ -167,7 +171,7 @@ export async function POST(request) {
         customerName: smsCustomerName,
         requestType: payload.requestType,
         humanRequested: payload.wantsHumanSupport,
-        requestReason: payload.message,
+        requestReason,
         isNewTicket: true,
         existingStatus: "open",
         acknowledgedAt: null,
@@ -188,7 +192,7 @@ export async function POST(request) {
       customerName: smsCustomerName,
       requestType: payload.requestType,
       humanRequested: payload.wantsHumanSupport,
-      requestReason: payload.message,
+      requestReason,
       isNewTicket: false,
       existingStatus,
       acknowledgedAt: existingHumanAcknowledgedAt,
