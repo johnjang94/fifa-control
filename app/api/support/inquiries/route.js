@@ -78,11 +78,14 @@ export async function POST(request) {
     const invite = await lookupInvite(db, payload.inviteToken);
     const inviteName = invite ? `${invite.firstName} ${invite.lastName}`.trim() : "";
     const invitePhone = invite?.phoneNumber || "";
-    const customerName =
+    const customerName = payload.contactName || inviteName || invitePhone || "Unknown guest";
+    const smsCustomerName =
       payload.contactName ||
       inviteName ||
       invitePhone ||
-      "Unknown guest";
+      payload.contactPhoneNumber ||
+      payload.inviteToken ||
+      "";
     const customerPhotoUrl = invite?.profilePhotoUrl ?? null;
     const phoneNumber = payload.contactPhoneNumber || invitePhone || payload.inviteToken || "";
 
@@ -161,9 +164,10 @@ export async function POST(request) {
       const created = await db.collection(COLLECTION).add(inquiryData);
       const inquiry = toInquiryItem(created.id, inquiryData);
       await maybeSendSupportSms({
-        customerName,
+        customerName: smsCustomerName,
         requestType: payload.requestType,
         humanRequested: payload.wantsHumanSupport,
+        requestReason: payload.message,
         isNewTicket: true,
         existingStatus: "open",
         acknowledgedAt: null,
@@ -181,9 +185,10 @@ export async function POST(request) {
     await docRef.set(inquiryData, { merge: true });
     const inquiry = toInquiryItem(payload.ticketId, inquiryData);
     await maybeSendSupportSms({
-      customerName,
+      customerName: smsCustomerName,
       requestType: payload.requestType,
       humanRequested: payload.wantsHumanSupport,
+      requestReason: payload.message,
       isNewTicket: false,
       existingStatus,
       acknowledgedAt: existingHumanAcknowledgedAt,
@@ -202,23 +207,28 @@ export async function POST(request) {
   }
 }
 
-function buildSupportSmsMessage({ customerName, humanRequested, requestType }) {
-  const displayName = customerName || "Unknown guest";
+function buildSupportSmsMessage({ customerName, humanRequested, requestType, requestReason }) {
+  const displayName = typeof customerName === "string" ? customerName.trim() : "";
+  const subject = displayName ? `${displayName} ` : "";
+  const reason = typeof requestReason === "string" ? requestReason.trim() : "";
+  const reasonSuffix = reason ? ` Reason: ${reason.slice(0, 140)}` : "";
+
   if (requestType === "food_request") {
-    return `Host alert: ${displayName} requested to bring food in the support channel.`;
+    return `Host alert: ${subject}requested to bring food in the support channel.${reasonSuffix}`;
   }
 
   if (humanRequested) {
-    return `Host alert: ${displayName} requested a live conversation in the support channel.`;
+    return `Host alert: ${subject}requested a live conversation in the support channel.${reasonSuffix}`;
   }
 
-  return `Host alert: ${displayName} is chatting with the support bot.`;
+  return `Host alert: ${subject}is chatting with the support bot.${reasonSuffix}`;
 }
 
 async function maybeSendSupportSms({
   customerName,
   requestType,
   humanRequested,
+  requestReason,
   isNewTicket,
   existingStatus,
   acknowledgedAt,
@@ -240,6 +250,7 @@ async function maybeSendSupportSms({
         customerName,
         requestType,
         humanRequested,
+        requestReason,
       }),
     );
   } catch {
