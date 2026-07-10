@@ -76,12 +76,15 @@ export async function POST(request) {
     const payload = parseSupportPayload(await request.json());
     const db = getDb();
     const invite = await lookupInvite(db, payload.inviteToken);
+    const inviteName = invite ? `${invite.firstName} ${invite.lastName}`.trim() : "";
+    const invitePhone = invite?.phoneNumber || "";
     const customerName =
       payload.contactName ||
-      (invite ? `${invite.firstName} ${invite.lastName}`.trim() : "") ||
-      "Guest";
+      inviteName ||
+      invitePhone ||
+      "이름 미확인";
     const customerPhotoUrl = invite?.profilePhotoUrl ?? null;
-    const phoneNumber = payload.contactPhoneNumber || invite?.phoneNumber || payload.inviteToken || "";
+    const phoneNumber = payload.contactPhoneNumber || invitePhone || payload.inviteToken || "";
 
     let docRef = null;
     let existingThread = [];
@@ -111,13 +114,14 @@ export async function POST(request) {
       }
     }
 
-    const reply = payload.requestType === "food_request"
-      ? {
-          topic: "food_request_submission",
-          answer: "Thanks. Your request has been sent to the admin.",
-          suggestedAction: "none",
-        }
-      : buildAutoReply(payload.message, customerName, existingThread);
+    const reply =
+      payload.requestType === "food_request"
+        ? {
+            topic: "food_request_submission",
+            answer: "Thanks. Your request has been sent to the host.",
+            suggestedAction: "none",
+          }
+        : buildAutoReply(payload.message, customerName, existingThread);
     const nextThread = [
       ...existingThread,
       {
@@ -199,16 +203,16 @@ export async function POST(request) {
 }
 
 function buildSupportSmsMessage({ customerName, humanRequested, requestType }) {
-  const displayName = customerName || "누군가";
+  const displayName = customerName || "이름 미확인";
   if (requestType === "food_request") {
-    return `지원 알림: ${displayName} 님이 음식 반입 요청을 보냈습니다.`;
+    return `host 알림: ${displayName} 님이 support 채널에서 음식 반입 요청을 보냈습니다.`;
   }
 
   if (humanRequested) {
-    return `지원 알림: ${displayName} 님이 실 상담을 요청했습니다.`;
+    return `host 알림: ${displayName} 님이 support 채널에서 실 상담을 요청했습니다.`;
   }
 
-  return `지원 알림: ${displayName} 님이 챗봇 상담 중입니다.`;
+  return `host 알림: ${displayName} 님이 support 채널에서 챗봇 상담 중입니다.`;
 }
 
 async function maybeSendSupportSms({
