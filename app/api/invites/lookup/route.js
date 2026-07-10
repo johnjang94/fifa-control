@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../lib/firestore";
+import { toInviteRequest } from "../../../../lib/invites";
 
 const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
@@ -50,15 +51,8 @@ export async function GET(request) {
     return json({ ok: true, invite: null });
   }
 
-  const data = snapshot.data() ?? {};
   return json({
     ok: true,
-    invite: {
-      firstName: String(data.firstName ?? ""),
-      lastName: String(data.lastName ?? ""),
-      phoneNumber: String(data.phoneNumber ?? ""),
-      profilePhotoUrl: typeof data.profilePhotoUrl === "string" ? data.profilePhotoUrl : "",
-      rsvp: String(data.rsvp ?? "Going"),
-    },
+    invite: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
   });
 }

@@ -121,7 +121,7 @@ export async function POST(request) {
             answer: "Thanks. Your request has been sent to the host.",
             suggestedAction: "none",
           }
-        : buildAutoReply(payload.message, customerName, existingThread);
+        : await buildAutoReply(payload.message, customerName, existingThread);
     const nextThread = [
       ...existingThread,
       {
