@@ -7,6 +7,7 @@ import {
   toInquiryItem,
 } from "../../../../lib/inquiry";
 import { toInviteRequest } from "../../../../lib/invites";
+import { sendSupportSms } from "../../../../lib/sms";
 
 const COLLECTION = "guest_faq_inquiries";
 const INVITE_COLLECTION = "invite_requests";
@@ -80,6 +81,8 @@ export async function POST(request) {
     let existingCurrentAgent = "Unassigned";
     let existingAssignedTo = "Unassigned";
     let existingCreatedAt = null;
+    let existingHumanRequestedAt = null;
+    let existingHumanAcknowledgedAt = null;
 
     if (payload.ticketId) {
       docRef = db.collection(COLLECTION).doc(payload.ticketId);
@@ -92,6 +95,8 @@ export async function POST(request) {
         existingCurrentAgent = String(data.currentAgent ?? "Unassigned");
         existingAssignedTo = String(data.assignedTo ?? "Unassigned");
         existingCreatedAt = data.createdAt ?? null;
+        existingHumanRequestedAt = data.humanRequestedAt ?? null;
+        existingHumanAcknowledgedAt = data.humanAcknowledgedAt ?? null;
       } else {
         docRef = null;
       }
@@ -111,9 +116,12 @@ export async function POST(request) {
       inviteToken: payload.inviteToken || phoneNumber,
       question: existingQuestion || currentMessage,
       answer: nextThread.filter((line) => line.role === "assistant").at(-1)?.message ?? "",
-      status: existingStatus || "open",
+      status: payload.wantsHumanSupport ? "human requested" : existingStatus || "open",
       currentAgent: existingCurrentAgent || "Unassigned",
       assignedTo: existingAssignedTo || "Unassigned",
+      humanRequestedAt:
+        existingHumanRequestedAt ?? (payload.wantsHumanSupport ? new Date() : null),
+      humanAcknowledgedAt: existingHumanAcknowledgedAt ?? null,
       thread: nextThread,
       updatedAt: new Date(),
       createdAt: existingCreatedAt ?? new Date(),
@@ -122,14 +130,68 @@ export async function POST(request) {
     if (!docRef) {
       const created = await db.collection(COLLECTION).add(inquiryData);
       const inquiry = toInquiryItem(created.id, inquiryData);
+      await maybeSendSupportSms({
+        customerName,
+        humanRequested: payload.wantsHumanSupport,
+        isNewTicket: true,
+        existingStatus: "open",
+        acknowledgedAt: null,
+        humanRequestedAt: inquiryData.humanRequestedAt,
+      });
       return json({ ok: true, inquiry, ticketId: created.id });
     }
 
     await docRef.set(inquiryData, { merge: true });
     const inquiry = toInquiryItem(payload.ticketId, inquiryData);
+    await maybeSendSupportSms({
+      customerName,
+      humanRequested: payload.wantsHumanSupport,
+      isNewTicket: false,
+      existingStatus,
+      acknowledgedAt: existingHumanAcknowledgedAt,
+      humanRequestedAt: existingHumanRequestedAt,
+    });
     return json({ ok: true, inquiry, ticketId: payload.ticketId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save inquiry.";
     return json({ ok: false, error: message }, { status: 400 });
+  }
+}
+
+function buildSupportSmsMessage({ customerName, humanRequested }) {
+  const displayName = customerName || "누군가";
+  if (humanRequested) {
+    return `지원 알림: ${displayName} 님이 실 상담을 요청했습니다.`;
+  }
+
+  return `지원 알림: ${displayName} 님이 챗봇 상담 중입니다.`;
+}
+
+async function maybeSendSupportSms({
+  customerName,
+  humanRequested,
+  isNewTicket,
+  existingStatus,
+  acknowledgedAt,
+  humanRequestedAt,
+}) {
+  const hasHumanAlert = Boolean(humanRequestedAt);
+  const shouldNotify =
+    isNewTicket ||
+    (humanRequested && !acknowledgedAt && !hasHumanAlert && existingStatus !== "human requested");
+
+  if (!shouldNotify) {
+    return;
+  }
+
+  try {
+    await sendSupportSms(
+      buildSupportSmsMessage({
+        customerName,
+        humanRequested,
+      }),
+    );
+  } catch {
+    // SMS notifications are best effort only.
   }
 }

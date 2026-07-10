@@ -7,7 +7,7 @@ const COLLECTION = "guest_faq_inquiries";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-admin-key",
-  "Access-Control-Allow-Methods": "POST,OPTIONS",
+  "Access-Control-Allow-Methods": "POST,PATCH,OPTIONS",
 };
 
 function json(body, init) {
@@ -68,6 +68,39 @@ export async function POST(request, { params }) {
       answer: message,
       currentAgent: String(payload?.agentName ?? data.currentAgent ?? "Admin"),
       status: String(payload?.status ?? "in progress"),
+      humanAcknowledgedAt: data.humanAcknowledgedAt ?? new Date(),
+      updatedAt: new Date(),
+    };
+
+    await docRef.set(nextData, { merge: true });
+
+    return json({
+      ok: true,
+      inquiry: toInquiryItem(params.id, nextData),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to update inquiry.";
+    return json({ ok: false, error: message }, { status: 400 });
+  }
+}
+
+export async function PATCH(request, { params }) {
+  if (!adminKeyMatches(request)) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const docRef = getDb().collection(COLLECTION).doc(params.id);
+    const snapshot = await docRef.get();
+    if (!snapshot.exists) {
+      return json({ ok: false, error: "Ticket not found." }, { status: 404 });
+    }
+
+    const data = snapshot.data() ?? {};
+    const nextData = {
+      ...data,
+      humanAcknowledgedAt: data.humanAcknowledgedAt ?? new Date(),
+      status: String(data.status ?? "human requested"),
       updatedAt: new Date(),
     };
 

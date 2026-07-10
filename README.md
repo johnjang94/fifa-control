@@ -4,6 +4,8 @@ Backend service for invite storage and admin reads.
 
 It exposes the `invite_requests` collection through `/api/invites`.
 It also exposes `/api/settings` for admin-managed invite capacity.
+Support chat tickets are stored in `guest_faq_inquiries`, and Twilio SMS alerts can be enabled with `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, and `SUPPORT_ALERT_TO_NUMBER`.
+Admin login checks `admin_users` for `role: "admin"` and `active: true`.
 
 ## Local setup
 
