@@ -25,7 +25,7 @@ export async function POST(request) {
     const db = getDb();
     const identity = await verifyAdminIdentity(db, payload);
 
-    if (!identity.ok && process.env.ADMIN_ACCESS_KEY) {
+    if (!identity.ok) {
       return json(
         { ok: false, error: identity.error ?? "Unauthorized" },
         { status: 401 },
