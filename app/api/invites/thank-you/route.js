@@ -5,6 +5,11 @@ import { sendAdminSms } from "../../../../lib/sms";
 import { toInviteRequest } from "../../../../lib/invites";
 
 const COLLECTION = "invite_requests";
+const THANK_YOU_ADMIN_SMS_DELIVERY_STATUS = {
+  SENT: "sent",
+  FAILED: "failed",
+  SKIPPED: "skipped",
+};
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type",
@@ -61,34 +66,47 @@ export async function POST(request) {
       });
     }
 
-    const message = `${firstName} has signed up for the watch party!`;
+    const message = `${firstName} has signed up for the event.`;
     const result = await sendAdminSms(message);
-
-    if (!result.ok) {
-      return json(
-        {
-          ok: false,
-          error: "Failed to send admin text.",
-        },
-        { status: 502 },
-      );
-    }
+    const deliveryStatus = result.ok
+      ? THANK_YOU_ADMIN_SMS_DELIVERY_STATUS.SENT
+      : result.skipped
+        ? THANK_YOU_ADMIN_SMS_DELIVERY_STATUS.SKIPPED
+        : THANK_YOU_ADMIN_SMS_DELIVERY_STATUS.FAILED;
+    const errorMessage = result.ok
+      ? null
+      : result.error ?? (result.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send admin text.");
 
     const primaryResult = result.results?.[0] ?? null;
 
     await docRef.set(
       {
-        thankYouAdminSmsSentAt: new Date(),
+        thankYouAdminSmsAttemptedAt: new Date(),
+        thankYouAdminSmsDeliveryStatus: deliveryStatus,
+        thankYouAdminSmsErrorMessage: errorMessage,
+        thankYouAdminSmsSentAt: result.ok ? new Date() : null,
         thankYouAdminSmsMessage: message,
         thankYouAdminSmsSid: primaryResult?.sid ?? null,
       },
       { merge: true },
     );
 
+    if (!result.ok) {
+      return json(
+        {
+          ok: false,
+          error: errorMessage ?? "Failed to send admin text.",
+          deliveryStatus,
+        },
+        { status: result.skipped ? 503 : 502 },
+      );
+    }
+
     return json({
       ok: true,
       alreadySent: false,
       sent: true,
+      deliveryStatus,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to send admin text.";

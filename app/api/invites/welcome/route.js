@@ -5,6 +5,11 @@ import { sendTextSms } from "../../../../lib/sms";
 import { toInviteRequest } from "../../../../lib/invites";
 
 const COLLECTION = "invite_requests";
+const WELCOME_SMS_DELIVERY_STATUS = {
+  SENT: "sent",
+  FAILED: "failed",
+  SKIPPED: "skipped",
+};
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type",
@@ -48,7 +53,6 @@ export async function POST(request) {
     const invite = toInviteRequest(snapshot.id, snapshot.data() ?? {});
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
     const firstName = String(invite.firstName ?? "").trim();
-    const inviteStatus = String(invite.status ?? "").toLowerCase();
     const sentAt = snapshot.data()?.welcomeSmsSentAt ?? null;
 
     if (!phoneNumber || !firstName) {
@@ -63,36 +67,42 @@ export async function POST(request) {
       });
     }
 
-    const message =
-      inviteStatus === "waitlist"
-        ? "Thank you for your interest in joining us! We will let you know as soon as the spot is available"
-        : `Hi ${firstName}, we are from FIFA Final X BTS Half-Time Show Watch Party. We would like to welcome you to the watch party! Thank you for joining us! You've been successfully signed up for the party! We look forward to seeing you!`;
+    const message = `Hi ${firstName}, we are reaching out to you from FIFA Final X BTS Half-Time Show Watch Party. We are pleased to have you with us! Please stay tuned for more information about the venue, the party, and the food. Thanks!`;
     const result = await sendTextSms({ to: phoneNumber, message });
+    const deliveryStatus = result.ok
+      ? WELCOME_SMS_DELIVERY_STATUS.SENT
+      : result.skipped
+        ? WELCOME_SMS_DELIVERY_STATUS.SKIPPED
+        : WELCOME_SMS_DELIVERY_STATUS.FAILED;
+    const errorMessage = result.ok
+      ? null
+      : result.error ?? (result.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send welcome text.");
+
+    await docRef.set({
+      welcomeSmsAttemptedAt: new Date(),
+      welcomeSmsDeliveryStatus: deliveryStatus,
+      welcomeSmsErrorMessage: errorMessage,
+      welcomeSmsSentAt: result.ok ? new Date() : null,
+      welcomeSmsMessage: message,
+      welcomeSmsSid: result.sid ?? null,
+    }, { merge: true });
 
     if (!result.ok) {
       return json(
         {
           ok: false,
-          error: result.error ?? "Failed to send welcome text.",
+          error: errorMessage ?? "Failed to send welcome text.",
+          deliveryStatus,
         },
-        { status: 502 },
+        { status: result.skipped ? 503 : 502 },
       );
     }
-
-    await docRef.set(
-      {
-        welcomeSmsSentAt: new Date(),
-        welcomeSmsMessage: message,
-        welcomeSmsSid: result.sid ?? null,
-        welcomeSmsVariant: inviteStatus === "waitlist" ? "waitlist" : "confirmed",
-      },
-      { merge: true },
-    );
 
     return json({
       ok: true,
       alreadySent: false,
       sent: true,
+      deliveryStatus,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to send welcome text.";
