@@ -4,7 +4,7 @@ import { getDb } from "../../../lib/firestore";
 import { deleteInviteAndRelatedInquiries, findInviteRef } from "../../../lib/invite-deletion";
 import { parseInvitePayload, toInviteRequest } from "../../../lib/invites";
 import { getInviteSettings } from "../../../lib/settings";
-import { sendTextSms } from "../../../lib/sms";
+import { sendAdminSms, sendTextSms } from "../../../lib/sms";
 
 const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
@@ -96,6 +96,25 @@ function buildReturnToGoingSmsMessage(firstName, isFull) {
   return `Hi ${firstName}, glad to have you back!`;
 }
 
+function getInviteNotificationMessages(firstName) {
+  return {
+    welcome: `Hi ${firstName}, we are reaching out to you from FIFA Final X BTS Half-Time Show Watch Party. We are pleased to have you with us! Please stay tuned for more information about the venue, the party, and the food. Thanks!`,
+    admin: `${firstName} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`,
+  };
+}
+
+function getDeliveryStatus(result) {
+  if (result.ok) {
+    return "sent";
+  }
+
+  if (result.skipped) {
+    return "skipped";
+  }
+
+  return "failed";
+}
+
 export function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
@@ -119,12 +138,76 @@ export async function POST(request) {
       status: isFull ? "waitlist" : "confirmed",
     });
 
+    const invite = toInviteRequest(doc.id, {
+      ...payload,
+      barcode,
+      createdAt: new Date(),
+      source: "guest-home",
+      status: isFull ? "waitlist" : "confirmed",
+    });
+    const firstName = String(invite.firstName ?? "").trim();
+    const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
+
+    const notificationMessages = getInviteNotificationMessages(firstName);
+    const notificationResults = await Promise.allSettled([
+      phoneNumber
+        ? sendTextSms({
+            to: phoneNumber,
+            message: notificationMessages.welcome,
+          })
+        : Promise.resolve({ ok: false, skipped: true }),
+      firstName
+        ? sendAdminSms(notificationMessages.admin)
+        : Promise.resolve({ ok: false, skipped: true }),
+    ]);
+
+    const welcomeResult =
+      notificationResults[0].status === "fulfilled"
+        ? notificationResults[0].value
+        : { ok: false, skipped: false, error: notificationResults[0].reason?.message ?? "Failed to send welcome text." };
+    const adminResult =
+      notificationResults[1].status === "fulfilled"
+        ? notificationResults[1].value
+        : { ok: false, skipped: false, error: notificationResults[1].reason?.message ?? "Failed to send admin text." };
+
+    await doc.set(
+      {
+        welcomeSmsAttemptedAt: new Date(),
+        welcomeSmsDeliveryStatus: getDeliveryStatus(welcomeResult),
+        welcomeSmsErrorMessage: welcomeResult.ok
+          ? null
+          : welcomeResult.error ?? (welcomeResult.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send welcome text."),
+        welcomeSmsSentAt: welcomeResult.ok ? new Date() : null,
+        welcomeSmsMessage: notificationMessages.welcome,
+        welcomeSmsSid: welcomeResult.sid ?? null,
+        registrationAdminSmsAttemptedAt: new Date(),
+        registrationAdminSmsDeliveryStatus: getDeliveryStatus(adminResult),
+        registrationAdminSmsErrorMessage: adminResult.ok
+          ? null
+          : adminResult.error ?? (adminResult.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send admin text."),
+        registrationAdminSmsSentAt: adminResult.ok ? new Date() : null,
+        registrationAdminSmsMessage: notificationMessages.admin,
+        registrationAdminSmsSid: adminResult.sid ?? null,
+      },
+      { merge: true },
+    );
+
     return json({
       ok: true,
       id: doc.id,
       qrToken: doc.id,
       barcode,
       isWaitlist: isFull,
+      notifications: {
+        welcome: {
+          ok: Boolean(welcomeResult.ok),
+          deliveryStatus: getDeliveryStatus(welcomeResult),
+        },
+        registrationAdmin: {
+          ok: Boolean(adminResult.ok),
+          deliveryStatus: getDeliveryStatus(adminResult),
+        },
+      },
     });
   } catch (error) {
     const message =

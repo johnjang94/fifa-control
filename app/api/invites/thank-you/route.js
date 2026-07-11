@@ -5,7 +5,7 @@ import { sendAdminSms } from "../../../../lib/sms";
 import { toInviteRequest } from "../../../../lib/invites";
 
 const COLLECTION = "invite_requests";
-const THANK_YOU_ADMIN_SMS_DELIVERY_STATUS = {
+const SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS = {
   SENT: "sent",
   FAILED: "failed",
   SKIPPED: "skipped",
@@ -52,10 +52,17 @@ export async function POST(request) {
 
     const invite = toInviteRequest(snapshot.id, snapshot.data() ?? {});
     const firstName = String(invite.firstName ?? "").trim();
-    const sentAt = snapshot.data()?.thankYouAdminSmsSentAt ?? null;
+    const survey = snapshot.data()?.survey ?? null;
+    const surveyCompletedAt = snapshot.data()?.surveyCompletedAt ?? null;
+    const referredBy = String(survey?.referredBy ?? "").trim();
+    const sentAt = snapshot.data()?.surveyCompletionAdminSmsSentAt ?? null;
 
     if (!firstName) {
       return json({ ok: false, error: "Invite is missing first name." }, { status: 400 });
+    }
+
+    if (!surveyCompletedAt) {
+      return json({ ok: false, error: "Survey is not completed yet." }, { status: 400 });
     }
 
     if (sentAt) {
@@ -66,13 +73,15 @@ export async function POST(request) {
       });
     }
 
-    const message = `${firstName} has signed up for the event.`;
+    const message = referredBy
+      ? `${firstName}, the friend of ${referredBy} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`
+      : `${firstName} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`;
     const result = await sendAdminSms(message);
     const deliveryStatus = result.ok
-      ? THANK_YOU_ADMIN_SMS_DELIVERY_STATUS.SENT
+      ? SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS.SENT
       : result.skipped
-        ? THANK_YOU_ADMIN_SMS_DELIVERY_STATUS.SKIPPED
-        : THANK_YOU_ADMIN_SMS_DELIVERY_STATUS.FAILED;
+        ? SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS.SKIPPED
+        : SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS.FAILED;
     const errorMessage = result.ok
       ? null
       : result.error ?? (result.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send admin text.");
@@ -81,12 +90,12 @@ export async function POST(request) {
 
     await docRef.set(
       {
-        thankYouAdminSmsAttemptedAt: new Date(),
-        thankYouAdminSmsDeliveryStatus: deliveryStatus,
-        thankYouAdminSmsErrorMessage: errorMessage,
-        thankYouAdminSmsSentAt: result.ok ? new Date() : null,
-        thankYouAdminSmsMessage: message,
-        thankYouAdminSmsSid: primaryResult?.sid ?? null,
+        surveyCompletionAdminSmsAttemptedAt: new Date(),
+        surveyCompletionAdminSmsDeliveryStatus: deliveryStatus,
+        surveyCompletionAdminSmsErrorMessage: errorMessage,
+        surveyCompletionAdminSmsSentAt: result.ok ? new Date() : null,
+        surveyCompletionAdminSmsMessage: message,
+        surveyCompletionAdminSmsSid: primaryResult?.sid ?? null,
       },
       { merge: true },
     );

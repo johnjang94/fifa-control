@@ -122,7 +122,9 @@ export async function POST(request) {
       }
     }
 
-    const requestReason = await buildSupportReason(payload.message, customerName, existingThread);
+    const requestReason = payload.wantsHumanSupport
+      ? await buildSupportReason(payload.message, customerName, existingThread)
+      : "";
 
     const reply =
       payload.requestType === "food_request"
@@ -231,7 +233,7 @@ function buildSupportSmsMessage({
 }) {
   const displayName = typeof customerName === "string" ? customerName.trim() : "";
   const subject = displayName ? `${displayName} ` : "";
-  const reason = typeof requestReason === "string" ? requestReason.trim() : "";
+  const reason = humanRequested && typeof requestReason === "string" ? requestReason.trim() : "";
   const reasonSuffix = reason ? ` Reason: ${reason.slice(0, 140)}` : "";
 
   if (
