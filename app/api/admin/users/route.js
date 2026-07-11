@@ -28,16 +28,34 @@ export function OPTIONS() {
 }
 
 export async function GET(request) {
-  const token = request.nextUrl.searchParams.get("token") ?? "";
-  if (token) {
-    const snapshot = await getDb().collection("invite_requests").doc(token).get();
-    if (!snapshot.exists) {
+  const token = (request.nextUrl.searchParams.get("token") ?? "").trim();
+  const barcode = (request.nextUrl.searchParams.get("barcode") ?? "").trim();
+  if (token || barcode) {
+    if (token) {
+      const snapshot = await getDb().collection("invite_requests").doc(token).get();
+      if (snapshot.exists) {
+        return json({
+          ok: true,
+          user: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+        });
+      }
+    }
+
+    const queryValue = barcode || token;
+    const barcodeSnapshot = await getDb()
+      .collection("invite_requests")
+      .where("barcode", "==", queryValue)
+      .limit(1)
+      .get();
+
+    if (barcodeSnapshot.empty) {
       return json({ ok: false, error: "User not found." }, { status: 404 });
     }
 
+    const doc = barcodeSnapshot.docs[0];
     return json({
       ok: true,
-      user: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+      user: toInviteRequest(doc.id, doc.data() ?? {}),
     });
   }
 
@@ -54,6 +72,65 @@ export async function GET(request) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   return json({ ok: true, users });
+}
+
+export async function PATCH(request) {
+  if (!adminKeyMatches(request)) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const payload = await request.json();
+    const inviteToken = String(payload?.inviteToken ?? "").trim();
+    const barcode = String(payload?.barcode ?? "").trim();
+
+    if (!inviteToken && !barcode) {
+      return json({ ok: false, error: "inviteToken or barcode is required." }, { status: 400 });
+    }
+
+    const db = getDb();
+    let docRef = null;
+
+    if (inviteToken) {
+      const directSnapshot = await db.collection("invite_requests").doc(inviteToken).get();
+      if (directSnapshot.exists) {
+        docRef = directSnapshot.ref;
+      }
+    }
+
+    if (!docRef && barcode) {
+      const barcodeSnapshot = await db
+        .collection("invite_requests")
+        .where("barcode", "==", barcode)
+        .limit(1)
+        .get();
+
+      if (!barcodeSnapshot.empty) {
+        docRef = barcodeSnapshot.docs[0].ref;
+      }
+    }
+
+    if (!docRef) {
+      return json({ ok: false, error: "User not found." }, { status: 404 });
+    }
+
+    await docRef.set(
+      {
+        checkedInAt: new Date(),
+        checkedInSource: "watch-party-admin",
+      },
+      { merge: true },
+    );
+
+    const snapshot = await docRef.get();
+    return json({
+      ok: true,
+      user: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to check in user.";
+    return json({ ok: false, error: message }, { status: 400 });
+  }
 }
 
 export async function DELETE(request) {
