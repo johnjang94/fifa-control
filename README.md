@@ -3,6 +3,9 @@
 Backend service for invite storage and admin reads.
 
 It exposes the `invite_requests` collection through `/api/invites`.
+Deleting an invite now also removes related support inquiries from `guest_faq_inquiries`.
+For manual Firestore deletions, deploy the Firebase Functions trigger in `firebase-functions/index.js` so related inquiries and profile photos are cleaned up automatically.
+For catch-up cleanup, call `POST /api/admin/maintenance/reconcile` with the admin key to remove orphaned inquiries.
 It also exposes `/api/settings` for admin-managed invite capacity.
 Support chat tickets are stored in `guest_faq_inquiries`, and Twilio SMS alerts can be enabled with `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, and `SUPPORT_ALERT_TO_NUMBER`.
 Admin login checks `admin_users` for `role: "admin"` and `active: true`.

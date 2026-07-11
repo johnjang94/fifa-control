@@ -2,18 +2,19 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../lib/firestore";
 import { toInviteRequest } from "../../../../lib/invites";
+import { createSupportAccessToken } from "../../../../lib/support-access";
 
 const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Allow-Headers": "content-type, authorization, x-support-access-token",
   "Access-Control-Allow-Methods": "GET,OPTIONS",
 };
 
 function json(body, init) {
   return NextResponse.json(body, {
     ...init,
-    headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) },
+    headers: { "Cache-Control": "no-store", ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
 }
 
@@ -51,8 +52,11 @@ export async function GET(request) {
     return json({ ok: true, invite: null });
   }
 
+  const invite = toInviteRequest(snapshot.id, snapshot.data() ?? {});
+
   return json({
     ok: true,
-    invite: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+    invite,
+    supportAccessToken: createSupportAccessToken(invite),
   });
 }

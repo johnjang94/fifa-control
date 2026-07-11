@@ -9,19 +9,20 @@ import {
 } from "../../../../lib/inquiry";
 import { toInviteRequest } from "../../../../lib/invites";
 import { sendSupportSms } from "../../../../lib/sms";
+import { getAuthorizedInvite } from "../../../../lib/support-access";
 
 const COLLECTION = "guest_faq_inquiries";
 const INVITE_COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Allow-Headers": "content-type, authorization, x-support-access-token",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 };
 
 function json(body, init) {
   return NextResponse.json(body, {
     ...init,
-    headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) },
+    headers: { "Cache-Control": "no-store", ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
 }
 
@@ -35,54 +36,44 @@ export async function GET(request) {
     return json({ ok: false, error: "ticketId is required." }, { status: 400 });
   }
 
-  const snapshot = await getDb().collection(COLLECTION).doc(ticketId).get();
+  const db = getDb();
+  const authorizedInvite = await getAuthorizedInvite(db, request);
+  if (!authorizedInvite) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const snapshot = await db.collection(COLLECTION).doc(ticketId).get();
   if (!snapshot.exists) {
     return json({ ok: false, error: "Ticket not found." }, { status: 404 });
   }
 
-  return json({
-    ok: true,
-    inquiry: toInquiryItem(snapshot.id, snapshot.data() ?? {}),
-  });
-}
-
-async function lookupInvite(db, identifiers = []) {
-  for (const identifier of identifiers) {
-    const safeValue = String(identifier ?? "").trim();
-    if (!safeValue) {
-      continue;
-    }
-
-    const directSnapshot = await db.collection(INVITE_COLLECTION).doc(safeValue).get();
-    if (directSnapshot.exists) {
-      return toInviteRequest(directSnapshot.id, directSnapshot.data() ?? {});
-    }
-
-    const phoneNumber = safeValue.replace(/\D/g, "");
-    if (!phoneNumber) {
-      continue;
-    }
-
-    const snapshot = await db
-      .collection(INVITE_COLLECTION)
-      .where("phoneNumber", "==", phoneNumber)
-      .limit(1)
-      .get();
-
-    if (!snapshot.empty) {
-      const doc = snapshot.docs[0];
-      return toInviteRequest(doc.id, doc.data());
-    }
+  const data = snapshot.data() ?? {};
+  const ticketInviteId = String(data.inviteId ?? "").trim();
+  const ticketPhoneNumber = String(data.phoneNumber ?? "").replace(/\D/g, "");
+  if (ticketInviteId && ticketInviteId !== authorizedInvite.id) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 403 });
+  }
+  if (!ticketInviteId && ticketPhoneNumber && ticketPhoneNumber !== authorizedInvite.phoneNumber) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 403 });
   }
 
-  return null;
+  return json({
+    ok: true,
+    inquiry: toInquiryItem(snapshot.id, data),
+  });
 }
 
 export async function POST(request) {
   try {
     const payload = parseSupportPayload(await request.json());
     const db = getDb();
-    const invite = await lookupInvite(db, [payload.inviteToken, payload.contactPhoneNumber]);
+    const authorizedInvite = await getAuthorizedInvite(db, request);
+    if (!authorizedInvite) {
+      return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
+    const inviteSnapshot = await db.collection(INVITE_COLLECTION).doc(authorizedInvite.id).get();
+    const invite = inviteSnapshot.exists ? toInviteRequest(inviteSnapshot.id, inviteSnapshot.data() ?? {}) : null;
     const inviteName = invite ? `${invite.firstName} ${invite.lastName}`.trim() : "";
     const invitePhone = invite?.phoneNumber || "";
     const customerName = payload.contactName || inviteName || invitePhone || "Unknown guest";
@@ -90,11 +81,10 @@ export async function POST(request) {
       payload.contactName ||
       inviteName ||
       invitePhone ||
-      payload.contactPhoneNumber ||
-      payload.inviteToken ||
+      authorizedInvite.phoneNumber ||
       "";
     const customerPhotoUrl = invite?.profilePhotoUrl ?? null;
-    const phoneNumber = payload.contactPhoneNumber || invitePhone || payload.inviteToken || "";
+    const phoneNumber = authorizedInvite.phoneNumber || invitePhone || "";
 
     let docRef = null;
     let existingThread = [];
@@ -111,6 +101,14 @@ export async function POST(request) {
       const snapshot = await docRef.get();
       if (snapshot.exists) {
         const data = snapshot.data() ?? {};
+        const ticketInviteId = String(data.inviteId ?? "").trim();
+        const ticketPhoneNumber = String(data.phoneNumber ?? "").replace(/\D/g, "");
+        if (ticketInviteId && ticketInviteId !== authorizedInvite.id) {
+          return json({ ok: false, error: "Unauthorized" }, { status: 403 });
+        }
+        if (!ticketInviteId && ticketPhoneNumber && ticketPhoneNumber !== authorizedInvite.phoneNumber) {
+          return json({ ok: false, error: "Unauthorized" }, { status: 403 });
+        }
         existingThread = Array.isArray(data.thread) ? data.thread : [];
         existingQuestion = String(data.question ?? "");
         existingStatus = String(data.status ?? "open");
@@ -150,11 +148,12 @@ export async function POST(request) {
     const currentMessage = String(payload.message ?? "");
 
     const inquiryData = {
+      inviteId: authorizedInvite.id,
       customer: customerName,
       customerPhotoUrl,
       phoneNumber,
-      inviteToken: payload.inviteToken || phoneNumber,
-      contactPhoneNumber: payload.contactPhoneNumber || "",
+      inviteToken: authorizedInvite.id,
+      contactPhoneNumber: authorizedInvite.phoneNumber,
       question: existingQuestion || currentMessage,
       answer: reply.answer,
       status: payload.wantsHumanSupport ? "human requested" : existingStatus || "open",

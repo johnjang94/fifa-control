@@ -1,0 +1,10 @@
+{
+  "name": "fifa-control-functions",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.8.0",
+    "firebase-functions": "^6.4.0"
+  }
+}

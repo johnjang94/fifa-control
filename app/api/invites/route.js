@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "../../../lib/firestore";
+import { deleteInviteAndRelatedInquiries, findInviteRef } from "../../../lib/invite-deletion";
 import { parseInvitePayload, toInviteRequest } from "../../../lib/invites";
 import { getInviteSettings } from "../../../lib/settings";
 
@@ -8,7 +9,7 @@ const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-admin-key",
-  "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
 };
 
 function json(body, init) {
@@ -98,31 +99,6 @@ export async function POST(request) {
   }
 }
 
-async function findInviteDoc(db, inviteToken) {
-  const safeToken = String(inviteToken ?? "").trim();
-
-  if (!safeToken) {
-    return null;
-  }
-
-  const directSnapshot = await db.collection(COLLECTION).doc(safeToken).get();
-  if (directSnapshot.exists) {
-    return directSnapshot.ref;
-  }
-
-  const querySnapshot = await db
-    .collection(COLLECTION)
-    .where("phoneNumber", "==", safeToken.replace(/\D/g, ""))
-    .limit(1)
-    .get();
-
-  if (querySnapshot.empty) {
-    return null;
-  }
-
-  return querySnapshot.docs[0].ref;
-}
-
 export async function GET(request) {
   const { inviteCount, capacity, isFull, snapshot } = await getInviteState();
 
@@ -167,7 +143,7 @@ export async function PATCH(request) {
     }
 
     const db = getDb();
-    const docRef = await findInviteDoc(db, inviteToken);
+    const docRef = await findInviteRef(db, inviteToken);
 
     if (!docRef) {
       return json({ ok: false, error: "Invite not found." }, { status: 404 });
@@ -188,6 +164,33 @@ export async function PATCH(request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to update RSVP.";
+    return json({ ok: false, error: message }, { status: 400 });
+  }
+}
+
+export async function DELETE(request) {
+  if (!adminKeyMatches(request)) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const inviteToken = String(request.nextUrl.searchParams.get("inviteToken") ?? "").trim();
+  if (!inviteToken) {
+    return json({ ok: false, error: "inviteToken is required." }, { status: 400 });
+  }
+
+  try {
+    const result = await deleteInviteAndRelatedInquiries(getDb(), inviteToken);
+    if (!result) {
+      return json({ ok: false, error: "Invite not found." }, { status: 404 });
+    }
+
+    return json({
+      ok: true,
+      user: result.invite,
+      deletedInquiryCount: result.deletedInquiryCount,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete invite.";
     return json({ ok: false, error: message }, { status: 400 });
   }
 }
