@@ -66,7 +66,7 @@ export async function POST(request) {
     const message =
       inviteStatus === "waitlist"
         ? "Thank you for your interest in joining us! We will let you know as soon as the spot is available"
-        : `Hi ${firstName}, welcome to the watch party. Your invitation has been confirmed.`;
+        : `Hi ${firstName}, we are from FIFA Final X BTS Half-Time Show Watch Party. We would like to welcome you to the watch party! Thank you for joining us! You've been successfully signed up for the party! We look forward to seeing you!`;
     const result = await sendTextSms({ to: phoneNumber, message });
 
     if (!result.ok) {
