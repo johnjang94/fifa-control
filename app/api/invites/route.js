@@ -4,6 +4,7 @@ import { getDb } from "../../../lib/firestore";
 import { deleteInviteAndRelatedInquiries, findInviteRef } from "../../../lib/invite-deletion";
 import { parseInvitePayload, toInviteRequest } from "../../../lib/invites";
 import { getInviteSettings } from "../../../lib/settings";
+import { sendTextSms } from "../../../lib/sms";
 
 const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
@@ -60,6 +61,39 @@ async function generateUniqueBarcode(db) {
   }
 
   throw new Error("Unable to allocate a barcode. Please try again.");
+}
+
+function normalizeRsvpValue(rsvp) {
+  const normalized = String(rsvp ?? "").trim().toLowerCase();
+  if (normalized === "maybe") {
+    return "maybe";
+  }
+
+  if (normalized === "not going") {
+    return "not going";
+  }
+
+  return "Going";
+}
+
+function buildRsvpSmsMessage(firstName, rsvp) {
+  if (rsvp === "maybe") {
+    return `Hi ${firstName}, we understand that you are busy. Still, we hope to have you at the party!`;
+  }
+
+  if (rsvp === "not going") {
+    return `Hi ${firstName}, we are sorry to see you go! Still, thank you for letting us know!`;
+  }
+
+  return "";
+}
+
+function buildReturnToGoingSmsMessage(firstName, isFull) {
+  if (isFull) {
+    return `Hi ${firstName}, we are glad to hear that you have decided to be with us in the end. We are sorry to tell you this, but it seems like we might need to get back to you for your spot. please stay tuned!`;
+  }
+
+  return `Hi ${firstName}, glad to have you back!`;
 }
 
 export function OPTIONS() {
@@ -132,7 +166,7 @@ export async function PATCH(request) {
   try {
     const payload = await request.json();
     const inviteToken = String(payload?.inviteToken ?? "").trim();
-    const rsvp = String(payload?.rsvp ?? "").trim();
+    const rsvp = normalizeRsvpValue(payload?.rsvp);
 
     if (!inviteToken) {
       return json({ ok: false, error: "inviteToken is required." }, { status: 400 });
@@ -149,6 +183,27 @@ export async function PATCH(request) {
       return json({ ok: false, error: "Invite not found." }, { status: 404 });
     }
 
+    const beforeSnapshot = await docRef.get();
+    const beforeData = beforeSnapshot.data() ?? {};
+    const firstName = String(beforeData.firstName ?? "").trim();
+    const previousRsvp = normalizeRsvpValue(beforeData.rsvp ?? "Going");
+    const isReturningToGoing =
+      rsvp === "Going" && ["maybe", "not going"].includes(previousRsvp);
+    const sentField =
+      rsvp === "maybe"
+        ? "rsvpSmsSentAtMaybe"
+        : rsvp === "not going"
+          ? "rsvpSmsSentAtNotGoing"
+          : "";
+    const message = firstName ? buildRsvpSmsMessage(firstName, rsvp) : "";
+    const returnToGoingMessage = firstName
+      ? buildReturnToGoingSmsMessage(firstName, (await getInviteState()).isFull)
+      : "";
+    const returnToGoingSentField = "rsvpSmsSentAtGoingReturn";
+    const shouldSendSms =
+      (Boolean(sentField) && Boolean(message) && !beforeData?.[sentField]) ||
+      (isReturningToGoing && Boolean(returnToGoingMessage) && !beforeData?.[returnToGoingSentField]);
+
     await docRef.set(
       {
         rsvp,
@@ -156,6 +211,29 @@ export async function PATCH(request) {
       },
       { merge: true },
     );
+
+    if (shouldSendSms) {
+      const to = String(beforeData.phoneNumber ?? "").replace(/\D/g, "");
+      const shouldUseReturnMessage = isReturningToGoing && !["maybe", "not going"].includes(rsvp);
+      const smsResult = await sendTextSms({
+        to,
+        message: shouldUseReturnMessage ? returnToGoingMessage : message,
+      }).catch(() => ({ ok: false }));
+
+      if (smsResult.ok) {
+        const smsFields = shouldUseReturnMessage
+          ? {
+              [returnToGoingSentField]: new Date(),
+              [`${returnToGoingSentField}Message`]: returnToGoingMessage,
+            }
+          : {
+              [sentField]: new Date(),
+              [`${sentField}Message`]: message,
+            };
+
+        await docRef.set(smsFields, { merge: true });
+      }
+    }
 
     const snapshot = await docRef.get();
     return json({
