@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../../lib/firestore";
 import { buildWelcomeSmsMessage, toInviteRequest } from "../../../../../lib/invites";
 import { sendTextSms } from "../../../../../lib/sms";
+import { verifyAdminSession } from "../../../../../lib/admin";
 
 const COLLECTION = "invite_requests";
 const WELCOME_SMS_DELIVERY_STATUS = {
@@ -12,7 +13,7 @@ const WELCOME_SMS_DELIVERY_STATUS = {
 };
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id, x-admin-key",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
 };
 
@@ -36,15 +37,20 @@ function adminKeyMatches(request) {
   return provided === expected;
 }
 
+async function adminSessionMatches(db, request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return { ok: false, error: "Admin session is required." };
+  }
+
+  return verifyAdminSession(db, sessionId);
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
 export async function POST(request) {
-  if (!adminKeyMatches(request)) {
-    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
     const payload = await request.json().catch(() => ({}));
     const inviteToken = String(payload?.inviteToken ?? "").trim();
@@ -54,6 +60,11 @@ export async function POST(request) {
     }
 
     const db = getDb();
+    const sessionCheck = await adminSessionMatches(db, request);
+    if (!sessionCheck.ok && !adminKeyMatches(request)) {
+      return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
     const docRef = db.collection(COLLECTION).doc(inviteToken);
     const snapshot = await docRef.get();
 
