@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../lib/firestore";
 import { toInviteRequest } from "../../../lib/invites";
+import { sendAdminSms } from "../../../lib/sms";
 
 const COLLECTION = "invite_requests";
 const ALLOWED_SOURCES = new Set(["Friends", "LinkedIn", "Eventbrite", "Instagram", "X"]);
 const ALLOWED_RESIDENT_VALUES = new Set(["Yes", "No"]);
+const SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS = {
+  SENT: "sent",
+  FAILED: "failed",
+  SKIPPED: "skipped",
+};
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type",
@@ -112,9 +118,43 @@ export async function POST(request) {
     );
 
     const snapshot = await docRef.get();
+    const firstName = String(snapshot.data()?.firstName ?? "").trim();
+    const surveyData = snapshot.data()?.survey ?? survey;
+    const surveyReferredBy = String(surveyData?.referredBy ?? "").trim();
+    const sentAt = snapshot.data()?.surveyCompletionAdminSmsSentAt ?? null;
+
+    if (firstName && !sentAt) {
+      const message = surveyReferredBy
+        ? `${firstName}, the friend of ${surveyReferredBy} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`
+        : `${firstName} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`;
+      const result = await sendAdminSms(message);
+      const deliveryStatus = result.ok
+        ? SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS.SENT
+        : result.skipped
+          ? SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS.SKIPPED
+          : SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS.FAILED;
+      const errorMessage = result.ok
+        ? null
+        : result.error ?? (result.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send admin text.");
+      const primaryResult = result.results?.[0] ?? null;
+
+      await docRef.set(
+        {
+          surveyCompletionAdminSmsAttemptedAt: new Date(),
+          surveyCompletionAdminSmsDeliveryStatus: deliveryStatus,
+          surveyCompletionAdminSmsErrorMessage: errorMessage,
+          surveyCompletionAdminSmsSentAt: result.ok ? new Date() : null,
+          surveyCompletionAdminSmsMessage: message,
+          surveyCompletionAdminSmsSid: primaryResult?.sid ?? null,
+        },
+        { merge: true },
+      );
+    }
+
+    const refreshedSnapshot = await docRef.get();
     return json({
       ok: true,
-      user: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+      user: toInviteRequest(refreshedSnapshot.id, refreshedSnapshot.data() ?? {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save survey.";
