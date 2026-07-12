@@ -24,7 +24,6 @@ export function OPTIONS() {
 
 export async function GET(request) {
   const rawInviteToken = String(request.nextUrl.searchParams.get("inviteToken") ?? "").trim();
-  const phoneNumber = rawInviteToken.replace(/\D/g, "");
 
   if (!rawInviteToken) {
     return json({ ok: false, error: "inviteToken is required." }, { status: 400 });
@@ -32,23 +31,9 @@ export async function GET(request) {
 
   const db = getDb();
   const directSnapshot = await db.collection(COLLECTION).doc(rawInviteToken).get();
-  let snapshot = directSnapshot.exists ? directSnapshot : null;
+  const snapshot = directSnapshot.exists ? directSnapshot : null;
 
   if (!snapshot) {
-    const phoneSnapshot = await db
-      .collection(COLLECTION)
-      .where("phoneNumber", "==", phoneNumber)
-      .limit(1)
-      .get();
-
-    if (phoneSnapshot.empty) {
-      return json({ ok: true, invite: null });
-    }
-
-    snapshot = phoneSnapshot.docs[0];
-  }
-
-  if (!snapshot.exists) {
     return json({ ok: true, invite: null });
   }
 
