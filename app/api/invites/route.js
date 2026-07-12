@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../lib/firestore";
 import { deleteInviteAndRelatedInquiries, findInviteRef } from "../../../lib/invite-deletion";
-import { parseInvitePayload, toInviteRequest } from "../../../lib/invites";
+import { buildWelcomeSmsMessage, parseInvitePayload, toInviteRequest } from "../../../lib/invites";
 import { getInviteSettings } from "../../../lib/settings";
 import { sendAdminSms, sendTextSms } from "../../../lib/sms";
 
@@ -98,7 +98,7 @@ function buildReturnToGoingSmsMessage(firstName, isFull) {
 
 function getInviteNotificationMessages(firstName) {
   return {
-    welcome: `Hi ${firstName}, we are reaching out to you from FIFA Final X BTS Half-Time Show Watch Party. We are pleased to have you with us! Please stay tuned for more information about the venue, the party, and the food. Thanks!`,
+    welcome: buildWelcomeSmsMessage(firstName),
     admin: `${firstName} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`,
   };
 }

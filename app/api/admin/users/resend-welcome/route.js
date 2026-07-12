@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { getDb } from "../../../../lib/firestore";
-import { sendTextSms } from "../../../../lib/sms";
-import { buildWelcomeSmsMessage, toInviteRequest } from "../../../../lib/invites";
+import { getDb } from "../../../../../lib/firestore";
+import { buildWelcomeSmsMessage, toInviteRequest } from "../../../../../lib/invites";
+import { sendTextSms } from "../../../../../lib/sms";
 
 const COLLECTION = "invite_requests";
 const WELCOME_SMS_DELIVERY_STATUS = {
@@ -12,7 +12,7 @@ const WELCOME_SMS_DELIVERY_STATUS = {
 };
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Allow-Headers": "content-type, x-admin-key",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
 };
 
@@ -26,14 +26,25 @@ function json(body, init) {
   });
 }
 
+function adminKeyMatches(request) {
+  const expected = process.env.ADMIN_ACCESS_KEY;
+  if (!expected) {
+    return true;
+  }
+
+  const provided = request.headers.get("x-admin-key") ?? "";
+  return provided === expected;
+}
+
 export function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: CORS_HEADERS,
-  });
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
 export async function POST(request) {
+  if (!adminKeyMatches(request)) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const payload = await request.json().catch(() => ({}));
     const inviteToken = String(payload?.inviteToken ?? "").trim();
@@ -47,24 +58,16 @@ export async function POST(request) {
     const snapshot = await docRef.get();
 
     if (!snapshot.exists) {
-      return json({ ok: false, error: "Invite not found." }, { status: 404 });
+      return json({ ok: false, error: "User not found." }, { status: 404 });
     }
 
+    const wasResent = Boolean(snapshot.data()?.welcomeSmsSentAt);
     const invite = toInviteRequest(snapshot.id, snapshot.data() ?? {});
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
     const firstName = String(invite.firstName ?? "").trim();
-    const sentAt = snapshot.data()?.welcomeSmsSentAt ?? null;
 
     if (!phoneNumber || !firstName) {
       return json({ ok: false, error: "Invite is missing contact information." }, { status: 400 });
-    }
-
-    if (sentAt) {
-      return json({
-        ok: true,
-        alreadySent: true,
-        sent: false,
-      });
     }
 
     const message = buildWelcomeSmsMessage(firstName);
@@ -78,14 +81,22 @@ export async function POST(request) {
       ? null
       : result.error ?? (result.skipped ? "SMS send was skipped because Twilio is not configured." : "Failed to send welcome text.");
 
-    await docRef.set({
-      welcomeSmsAttemptedAt: new Date(),
-      welcomeSmsDeliveryStatus: deliveryStatus,
-      welcomeSmsErrorMessage: errorMessage,
-      welcomeSmsSentAt: result.ok ? new Date() : null,
-      welcomeSmsMessage: message,
-      welcomeSmsSid: result.sid ?? null,
-    }, { merge: true });
+    const previousSentAt = snapshot.data()?.welcomeSmsSentAt ?? null;
+    const previousResendCount = Number(snapshot.data()?.welcomeSmsResendCount ?? 0);
+
+    await docRef.set(
+      {
+        welcomeSmsAttemptedAt: new Date(),
+        welcomeSmsDeliveryStatus: deliveryStatus,
+        welcomeSmsErrorMessage: errorMessage,
+        welcomeSmsSentAt: previousSentAt ?? (result.ok ? new Date() : null),
+        welcomeSmsMessage: message,
+        welcomeSmsSid: result.sid ?? null,
+        welcomeSmsResentAt: result.ok ? new Date() : null,
+        welcomeSmsResendCount: result.ok ? previousResendCount + 1 : previousResendCount,
+      },
+      { merge: true },
+    );
 
     if (!result.ok) {
       return json(
@@ -98,14 +109,16 @@ export async function POST(request) {
       );
     }
 
+    const refreshedSnapshot = await docRef.get();
     return json({
       ok: true,
-      alreadySent: false,
-      sent: true,
+      resent: true,
+      wasResent,
       deliveryStatus,
+      user: toInviteRequest(refreshedSnapshot.id, refreshedSnapshot.data() ?? {}),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to send welcome text.";
+    const message = error instanceof Error ? error.message : "Failed to resend welcome text.";
     return json({ ok: false, error: message }, { status: 400 });
   }
 }
