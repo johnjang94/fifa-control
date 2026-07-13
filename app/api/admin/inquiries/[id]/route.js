@@ -39,6 +39,16 @@ function buildHumanReplySmsMessage(managerName) {
   return `You've received a reply from ${name}.`;
 }
 
+function normalizeAgentName(value) {
+  const name = String(value ?? "").trim();
+  const lower = name.toLowerCase();
+  if (!name || lower === "unassigned" || lower === "admin") {
+    return "";
+  }
+
+  return name;
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -66,9 +76,11 @@ export async function POST(request, { params }) {
     const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
     const sourceData = timeoutCheck.appended ? timeoutCheck.data : data;
     const thread = Array.isArray(sourceData.thread) ? sourceData.thread : [];
-    const shouldNotifyUser =
-      Boolean(sourceData.humanRequestedAt) &&
-      String(sourceData.phoneNumber ?? "").replace(/\D/g, "").length > 0;
+    const shouldNotifyUser = String(sourceData.phoneNumber ?? "").replace(/\D/g, "").length > 0;
+    const existingAgentName = normalizeAgentName(sourceData.currentAgent ?? sourceData.assignedTo);
+    const existingAssignedName = normalizeAgentName(sourceData.assignedTo);
+    const incomingAgentName = normalizeAgentName(payload?.agentName);
+    const resolvedAgentName = existingAgentName || incomingAgentName || "Admin";
     const now = new Date().toISOString();
     const nextThread = [
       ...thread,
@@ -83,7 +95,8 @@ export async function POST(request, { params }) {
       ...sourceData,
       thread: nextThread,
       answer: message,
-      currentAgent: String(payload?.agentName ?? sourceData.currentAgent ?? "Admin"),
+      currentAgent: resolvedAgentName,
+      assignedTo: existingAssignedName || resolvedAgentName,
       status: String(payload?.status ?? "in progress"),
       humanAcknowledgedAt: sourceData.humanAcknowledgedAt ?? new Date(),
       humanConnectionSmsSentAt: sourceData.humanConnectionSmsSentAt ?? null,
@@ -92,7 +105,7 @@ export async function POST(request, { params }) {
     };
 
     if (shouldNotifyUser) {
-      const managerName = String(payload?.agentName ?? nextData.currentAgent ?? "Admin").trim() || "Admin";
+      const managerName = resolvedAgentName;
       const phoneNumber = String(sourceData.phoneNumber ?? "").replace(/\D/g, "");
       const notification = buildHumanReplySmsMessage(managerName);
 
