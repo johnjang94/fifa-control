@@ -33,8 +33,8 @@ export async function POST(request) {
       return json({ ok: false, error: "Please enter a valid phone number." }, { status: 400 });
     }
 
-    if (code.length !== 6) {
-      return json({ ok: false, error: "Please enter the 6-digit code." }, { status: 400 });
+    if (code.length !== 5) {
+      return json({ ok: false, error: "Please enter the 5-digit code." }, { status: 400 });
     }
 
     const db = getDb();
