@@ -9,6 +9,7 @@ import {
   parseSupportPayload,
   toInquiryItem,
 } from "../../../../lib/inquiry";
+import { maybeAppendHumanTimeoutNotice } from "../../../../lib/human-response";
 import { toInviteRequest } from "../../../../lib/invites";
 import { sendSupportSms } from "../../../../lib/sms";
 import { getAuthorizedInvite } from "../../../../lib/support-access";
@@ -98,6 +99,7 @@ export async function POST(request) {
     let existingHumanRequestedAt = null;
     let existingHumanAcknowledgedAt = null;
     let existingHumanConnectionSmsSentAt = null;
+    let existingHumanTimeoutNoticeAt = null;
     let existingTicketCode = "";
 
     if (payload.ticketId) {
@@ -122,7 +124,23 @@ export async function POST(request) {
         existingHumanRequestedAt = data.humanRequestedAt ?? null;
         existingHumanAcknowledgedAt = data.humanAcknowledgedAt ?? null;
         existingHumanConnectionSmsSentAt = data.humanConnectionSmsSentAt ?? null;
+        existingHumanTimeoutNoticeAt = data.humanTimeoutNoticeAt ?? null;
         existingTicketCode = String(data.ticketCode ?? "").trim();
+        const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
+        if (timeoutCheck.appended) {
+          existingThread = Array.isArray(timeoutCheck.data.thread) ? timeoutCheck.data.thread : existingThread;
+          existingHumanRequestedAt = timeoutCheck.data.humanRequestedAt ?? existingHumanRequestedAt;
+          existingHumanAcknowledgedAt = timeoutCheck.data.humanAcknowledgedAt ?? existingHumanAcknowledgedAt;
+          existingHumanConnectionSmsSentAt =
+            timeoutCheck.data.humanConnectionSmsSentAt ?? existingHumanConnectionSmsSentAt;
+          existingHumanTimeoutNoticeAt =
+            timeoutCheck.data.humanTimeoutNoticeAt ?? existingHumanTimeoutNoticeAt;
+          existingStatus = timeoutCheck.data.status ?? existingStatus;
+          existingCurrentAgent = timeoutCheck.data.currentAgent ?? existingCurrentAgent;
+          existingAssignedTo = timeoutCheck.data.assignedTo ?? existingAssignedTo;
+          existingCreatedAt = timeoutCheck.data.createdAt ?? existingCreatedAt;
+          existingTicketCode = timeoutCheck.data.ticketCode ?? existingTicketCode;
+        }
       } else {
         docRef = null;
       }
@@ -178,6 +196,7 @@ export async function POST(request) {
         existingHumanRequestedAt ?? (payload.wantsHumanSupport ? new Date() : null),
       humanAcknowledgedAt: existingHumanAcknowledgedAt ?? null,
       humanConnectionSmsSentAt: existingHumanConnectionSmsSentAt ?? null,
+      humanTimeoutNoticeAt: existingHumanTimeoutNoticeAt ?? null,
       topic: reply.topic,
       suggestedAction: reply.suggestedAction,
       requestReason,

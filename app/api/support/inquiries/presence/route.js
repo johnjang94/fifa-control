@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../../lib/firestore";
 import { getAuthorizedInvite } from "../../../../../lib/support-access";
+import { maybeAppendHumanTimeoutNotice } from "../../../../../lib/human-response";
 
 const COLLECTION = "guest_faq_inquiries";
 const CORS_HEADERS = {
@@ -54,16 +55,18 @@ export async function POST(request) {
     }
 
     const now = new Date();
+    const timeoutCheck = maybeAppendHumanTimeoutNotice(data, now);
+    const sourceData = timeoutCheck.appended ? timeoutCheck.data : data;
     const nextData =
       state === "inactive"
         ? {
-            ...data,
+            ...sourceData,
             supportChatState: "inactive",
             supportChatInactiveAt: now,
             updatedAt: now,
           }
         : {
-            ...data,
+            ...sourceData,
             supportChatState: "active",
             supportChatActiveAt: now,
             supportChatReadAt: now,

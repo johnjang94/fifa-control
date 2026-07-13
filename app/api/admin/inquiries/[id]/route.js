@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../../lib/firestore";
 import { toInquiryItem } from "../../../../../lib/inquiry";
+import { maybeAppendHumanTimeoutNotice } from "../../../../../lib/human-response";
 import { sendTextSms } from "../../../../../lib/sms";
 
 const COLLECTION = "guest_faq_inquiries";
@@ -10,7 +11,6 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "content-type, x-admin-key",
   "Access-Control-Allow-Methods": "POST,PATCH,OPTIONS",
 };
-const SUPPORT_PRESENCE_WINDOW_MS = 45 * 1000;
 
 function json(body, init) {
   return NextResponse.json(body, {
@@ -39,35 +39,6 @@ function buildHumanReplySmsMessage(managerName) {
   return `You've received a reply from ${name}.`;
 }
 
-function getTimestamp(value) {
-  if (!value) {
-    return 0;
-  }
-
-  if (typeof value === "string") {
-    const timestamp = new Date(value).getTime();
-    return Number.isFinite(timestamp) ? timestamp : 0;
-  }
-
-  if (typeof value.toDate === "function") {
-    const timestamp = value.toDate().getTime();
-    return Number.isFinite(timestamp) ? timestamp : 0;
-  }
-
-  if (typeof value === "object" && value instanceof Date) {
-    const timestamp = value.getTime();
-    return Number.isFinite(timestamp) ? timestamp : 0;
-  }
-
-  return 0;
-}
-
-function isUserActiveInChat(data) {
-  const activeState = String(data.supportChatState ?? "").toLowerCase();
-  const activeAt = getTimestamp(data.supportChatActiveAt);
-  return activeState === "active" && activeAt > 0 && Date.now() - activeAt <= SUPPORT_PRESENCE_WINDOW_MS;
-}
-
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -92,10 +63,12 @@ export async function POST(request, { params }) {
     }
 
     const data = snapshot.data() ?? {};
-    const thread = Array.isArray(data.thread) ? data.thread : [];
+    const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
+    const sourceData = timeoutCheck.appended ? timeoutCheck.data : data;
+    const thread = Array.isArray(sourceData.thread) ? sourceData.thread : [];
     const shouldNotifyUser =
-      Boolean(data.humanRequestedAt) &&
-      String(data.phoneNumber ?? "").replace(/\D/g, "").length > 0;
+      Boolean(sourceData.humanRequestedAt) &&
+      String(sourceData.phoneNumber ?? "").replace(/\D/g, "").length > 0;
     const now = new Date().toISOString();
     const nextThread = [
       ...thread,
@@ -107,38 +80,29 @@ export async function POST(request, { params }) {
     ];
 
     const nextData = {
-      ...data,
+      ...sourceData,
       thread: nextThread,
       answer: message,
-      currentAgent: String(payload?.agentName ?? data.currentAgent ?? "Admin"),
+      currentAgent: String(payload?.agentName ?? sourceData.currentAgent ?? "Admin"),
       status: String(payload?.status ?? "in progress"),
-      humanAcknowledgedAt: data.humanAcknowledgedAt ?? new Date(),
-      humanConnectionSmsSentAt: data.humanConnectionSmsSentAt ?? null,
+      humanAcknowledgedAt: sourceData.humanAcknowledgedAt ?? new Date(),
+      humanConnectionSmsSentAt: sourceData.humanConnectionSmsSentAt ?? null,
+      humanTimeoutNoticeAt: sourceData.humanTimeoutNoticeAt ?? null,
       updatedAt: new Date(),
     };
 
     if (shouldNotifyUser) {
       const managerName = String(payload?.agentName ?? nextData.currentAgent ?? "Admin").trim() || "Admin";
-      const phoneNumber = String(data.phoneNumber ?? "").replace(/\D/g, "");
-      if (!data.humanConnectionSmsSentAt) {
-        const notification = buildHumanConnectionSmsMessage(managerName);
+      const phoneNumber = String(sourceData.phoneNumber ?? "").replace(/\D/g, "");
+      const notification = buildHumanReplySmsMessage(managerName);
 
-        try {
-          const smsResult = await sendTextSms({ to: phoneNumber, message: notification });
-          if (smsResult.ok) {
-            nextData.humanConnectionSmsSentAt = new Date();
-          }
-        } catch {
-          // Best effort only.
+      try {
+        const smsResult = await sendTextSms({ to: phoneNumber, message: notification });
+        if (smsResult.ok && !sourceData.humanConnectionSmsSentAt) {
+          nextData.humanConnectionSmsSentAt = new Date();
         }
-      } else if (!isUserActiveInChat(data)) {
-        const notification = buildHumanReplySmsMessage(managerName);
-
-        try {
-          await sendTextSms({ to: phoneNumber, message: notification });
-        } catch {
-          // Best effort only.
-        }
+      } catch {
+        // Best effort only.
       }
     }
 
@@ -167,17 +131,20 @@ export async function PATCH(request, { params }) {
     }
 
     const data = snapshot.data() ?? {};
+    const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
+    const sourceData = timeoutCheck.appended ? timeoutCheck.data : data;
     const nextData = {
-      ...data,
-      humanAcknowledgedAt: data.humanAcknowledgedAt ?? new Date(),
-      status: String(data.status ?? "human requested"),
-      humanConnectionSmsSentAt: data.humanConnectionSmsSentAt ?? null,
+      ...sourceData,
+      humanAcknowledgedAt: sourceData.humanAcknowledgedAt ?? new Date(),
+      status: String(sourceData.status ?? "human requested"),
+      humanConnectionSmsSentAt: sourceData.humanConnectionSmsSentAt ?? null,
+      humanTimeoutNoticeAt: sourceData.humanTimeoutNoticeAt ?? null,
       updatedAt: new Date(),
     };
 
-    if (!data.humanConnectionSmsSentAt && data.humanRequestedAt) {
-      const managerName = String(data.currentAgent ?? "Admin").trim() || "Admin";
-      const phoneNumber = String(data.phoneNumber ?? "").replace(/\D/g, "");
+    if (!sourceData.humanConnectionSmsSentAt && sourceData.humanRequestedAt) {
+      const managerName = String(sourceData.currentAgent ?? "Admin").trim() || "Admin";
+      const phoneNumber = String(sourceData.phoneNumber ?? "").replace(/\D/g, "");
       const notification = buildHumanConnectionSmsMessage(managerName);
 
       try {
