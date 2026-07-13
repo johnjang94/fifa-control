@@ -4,6 +4,8 @@ import { getDb } from "../../../../lib/firestore";
 import {
   buildAutoReply,
   buildSupportReason,
+  buildSupportThreadTitle,
+  createTicketCode,
   parseSupportPayload,
   toInquiryItem,
 } from "../../../../lib/inquiry";
@@ -95,6 +97,8 @@ export async function POST(request) {
     let existingCreatedAt = null;
     let existingHumanRequestedAt = null;
     let existingHumanAcknowledgedAt = null;
+    let existingHumanConnectionSmsSentAt = null;
+    let existingTicketCode = "";
 
     if (payload.ticketId) {
       docRef = db.collection(COLLECTION).doc(payload.ticketId);
@@ -117,6 +121,8 @@ export async function POST(request) {
         existingCreatedAt = data.createdAt ?? null;
         existingHumanRequestedAt = data.humanRequestedAt ?? null;
         existingHumanAcknowledgedAt = data.humanAcknowledgedAt ?? null;
+        existingHumanConnectionSmsSentAt = data.humanConnectionSmsSentAt ?? null;
+        existingTicketCode = String(data.ticketCode ?? "").trim();
       } else {
         docRef = null;
       }
@@ -148,6 +154,13 @@ export async function POST(request) {
       },
     ];
     const currentMessage = String(payload.message ?? "");
+    const summaryTitle = await buildSupportThreadTitle({
+      message: currentMessage,
+      question: existingQuestion || currentMessage,
+      answer: reply.answer,
+      customerName,
+      existingThread: nextThread,
+    });
 
     const inquiryData = {
       inviteId: authorizedInvite.id,
@@ -164,10 +177,15 @@ export async function POST(request) {
       humanRequestedAt:
         existingHumanRequestedAt ?? (payload.wantsHumanSupport ? new Date() : null),
       humanAcknowledgedAt: existingHumanAcknowledgedAt ?? null,
+      humanConnectionSmsSentAt: existingHumanConnectionSmsSentAt ?? null,
       topic: reply.topic,
       suggestedAction: reply.suggestedAction,
       requestReason,
+      ticketCode: existingTicketCode || createTicketCode(),
+      summaryTitle,
       thread: nextThread,
+      supportChatActiveAt: new Date(),
+      supportChatState: "active",
       updatedAt: new Date(),
       createdAt: existingCreatedAt ?? new Date(),
     };
