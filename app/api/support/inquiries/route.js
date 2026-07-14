@@ -8,10 +8,18 @@ import {
   parseSupportPayload,
   toInquiryItem,
 } from "../../../../lib/inquiry";
+import {
+  buildSupportWelcomeMessage,
+  buildHumanEscalationAdminSms,
+  buildNewSupportChatAdminSms,
+  generateSupportAssistantReply,
+  generateSupportEscalationSummary,
+  getSupportAssistantName,
+} from "../../../../lib/support-ai";
 import { maybeAppendHumanTimeoutNotice } from "../../../../lib/human-response";
 import { toInviteRequest } from "../../../../lib/invites";
 import { publishRealtimeInquiryUpdate } from "../../../../lib/realtime";
-import { sendSupportSms, sendTextSms } from "../../../../lib/sms";
+import { sendAdminSms, sendSupportSms, sendTextSms } from "../../../../lib/sms";
 import { getAuthorizedInvite } from "../../../../lib/support-access";
 import { verifyAdminSession } from "../../../../lib/admin";
 import {
@@ -114,6 +122,52 @@ async function maybeSendSupportSms({
   }
 }
 
+async function maybeSendSupportChatAdminSms({
+  customerName,
+  requestReason,
+  wantsHumanSupport,
+  isNewTicket,
+  existingHumanRequestedAt,
+  currentMessage,
+  existingThread,
+}) {
+  const messages = [];
+
+  if (isNewTicket) {
+    messages.push(
+      sendAdminSms(
+        buildNewSupportChatAdminSms({
+          customerName,
+          requestReason,
+        }),
+      ),
+    );
+  }
+
+  if (wantsHumanSupport && !existingHumanRequestedAt) {
+    const summary = await generateSupportEscalationSummary({
+      customerName,
+      message: currentMessage,
+      existingThread,
+    });
+
+    messages.push(
+      sendAdminSms(
+        buildHumanEscalationAdminSms({
+          customerName,
+          summary,
+        }),
+      ),
+    );
+  }
+
+  if (!messages.length) {
+    return;
+  }
+
+  await Promise.allSettled(messages);
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -181,6 +235,7 @@ export async function POST(request) {
     let existingHumanConnectionSmsSentAt = null;
     let existingHumanTimeoutNoticeAt = null;
     let existingTicketCode = "";
+    let existingSupportOffTopicStreak = 0;
     let inviteName = "";
     let invitePhone = "";
     let customerPhotoUrl = null;
@@ -220,6 +275,7 @@ export async function POST(request) {
         existingHumanConnectionSmsSentAt = existingData.humanConnectionSmsSentAt ?? null;
         existingHumanTimeoutNoticeAt = existingData.humanTimeoutNoticeAt ?? null;
         existingTicketCode = String(existingData.ticketCode ?? "").trim();
+        existingSupportOffTopicStreak = Number(existingData.supportOffTopicStreak ?? 0) || 0;
         const timeoutCheck = maybeAppendHumanTimeoutNotice(existingData);
         if (timeoutCheck.appended) {
           existingThread = Array.isArray(timeoutCheck.data.thread) ? timeoutCheck.data.thread : existingThread;
@@ -229,6 +285,8 @@ export async function POST(request) {
             timeoutCheck.data.humanConnectionSmsSentAt ?? existingHumanConnectionSmsSentAt;
           existingHumanTimeoutNoticeAt =
             timeoutCheck.data.humanTimeoutNoticeAt ?? existingHumanTimeoutNoticeAt;
+          existingSupportOffTopicStreak =
+            Number(timeoutCheck.data.supportOffTopicStreak ?? existingSupportOffTopicStreak) || existingSupportOffTopicStreak;
           existingStatus = timeoutCheck.data.status ?? existingStatus;
           existingCurrentAgent = timeoutCheck.data.currentAgent ?? existingCurrentAgent;
           existingAssignedTo = timeoutCheck.data.assignedTo ?? existingAssignedTo;
@@ -249,14 +307,60 @@ export async function POST(request) {
     const requestReason = isAgentMessage
       ? String(existingData.requestReason ?? "")
       : await buildSupportReason(currentMessage, customerName, existingThread);
-    const nextThread = [
-      ...existingThread,
-      {
-        role: isAgentMessage ? "agent" : "customer",
+    const supportAssistantName = getSupportAssistantName();
+    const nextThread = [...existingThread];
+    let nextSupportOffTopicStreak = existingSupportOffTopicStreak;
+
+    if (!isAgentMessage && nextThread.length === 0) {
+      nextThread.push({
+        role: "assistant",
+        senderName: supportAssistantName,
+        message: buildSupportWelcomeMessage(
+          normalizeString(payload.contactName) || normalizeString(customerName) || "there",
+        ),
+        createdAt: now.toISOString(),
+      });
+    }
+
+    if (isAgentMessage) {
+      nextThread.push({
+        role: "agent",
+        senderName: agentName,
         message: currentMessage,
         createdAt: now.toISOString(),
-      },
-    ];
+      });
+    } else {
+      nextThread.push({
+        role: "customer",
+        senderName: customerName,
+        message: currentMessage,
+        createdAt: now.toISOString(),
+      });
+    }
+
+    let assistantReply = existingAnswer;
+    if (!isAgentMessage) {
+      const assistantResult = await generateSupportAssistantReply({
+        customerName,
+        message: currentMessage,
+        existingThread: nextThread,
+        wantsHumanSupport: payload.wantsHumanSupport,
+        offTopicStreak: existingSupportOffTopicStreak,
+      });
+      assistantReply = assistantResult.reply;
+      nextSupportOffTopicStreak = payload.wantsHumanSupport
+        ? existingSupportOffTopicStreak
+        : assistantResult.related
+          ? 0
+          : Math.min(existingSupportOffTopicStreak + 1, 3);
+
+      nextThread.push({
+        role: "assistant",
+        senderName: supportAssistantName,
+        message: assistantReply,
+        createdAt: new Date(now.getTime() + 1).toISOString(),
+      });
+    }
 
     const summaryTitle =
       String(existingData.summaryTitle ?? "").trim() ||
@@ -273,8 +377,14 @@ export async function POST(request) {
     const nextStatus = isAgentMessage ? "in progress" : existingStatus || "open";
     const nextCurrentAgent = isAgentMessage
       ? agentName || existingCurrentAgent || "Admin"
-      : existingCurrentAgent || "Unassigned";
-    const nextAssignedTo = isAgentMessage ? nextCurrentAgent || "Admin" : existingAssignedTo || "Unassigned";
+      : existingCurrentAgent && existingCurrentAgent !== "Unassigned"
+        ? existingCurrentAgent
+        : "Unassigned";
+    const nextAssignedTo = isAgentMessage
+      ? nextCurrentAgent || "Admin"
+      : existingAssignedTo && existingAssignedTo !== "Unassigned"
+        ? existingAssignedTo
+        : "Unassigned";
 
     const nextPhoneNumber = isAgentMessage
       ? String(existingData.phoneNumber ?? invitePhone ?? "").trim()
@@ -294,7 +404,7 @@ export async function POST(request) {
       inviteToken: authorizedInvite?.id ?? String(existingData.inviteToken ?? ""),
       contactPhoneNumber: nextContactPhoneNumber,
       question: existingQuestion || currentMessage,
-      answer: isAgentMessage ? currentMessage : existingAnswer,
+      answer: isAgentMessage ? currentMessage : assistantReply,
       status: nextStatus,
       currentAgent: nextCurrentAgent,
       assignedTo: nextAssignedTo,
@@ -307,6 +417,7 @@ export async function POST(request) {
       requestReason,
       ticketCode: existingTicketCode || createTicketCode(),
       summaryTitle,
+      supportOffTopicStreak: nextSupportOffTopicStreak,
       thread: nextThread,
       supportChatActiveAt: now,
       supportChatState: "active",
@@ -324,6 +435,18 @@ export async function POST(request) {
         isNewTicket: true,
         existingHumanRequestedAt: null,
       });
+      await maybeSendSupportChatAdminSms({
+        customerName,
+        requestReason,
+        wantsHumanSupport: payload.wantsHumanSupport,
+        isNewTicket: true,
+        existingHumanRequestedAt: null,
+        currentMessage,
+        existingThread: nextThread,
+        ticketId: created.id,
+        ticketCode: inquiryData.ticketCode,
+      });
+      await publishRealtimeInquiryUpdate(inquiry.id, inquiry);
       return json({
         ok: true,
         inquiry,
@@ -356,6 +479,17 @@ export async function POST(request) {
         wantsHumanSupport: payload.wantsHumanSupport,
         isNewTicket: false,
         existingHumanRequestedAt,
+      });
+      await maybeSendSupportChatAdminSms({
+        customerName,
+        requestReason,
+        wantsHumanSupport: payload.wantsHumanSupport,
+        isNewTicket: false,
+        existingHumanRequestedAt,
+        currentMessage,
+        existingThread: nextThread,
+        ticketId: docRef.id,
+        ticketCode: inquiryData.ticketCode,
       });
     }
 

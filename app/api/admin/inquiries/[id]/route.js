@@ -43,7 +43,7 @@ function buildHumanReplySmsMessage(managerName) {
 function normalizeAgentName(value) {
   const name = String(value ?? "").trim();
   const lower = name.toLowerCase();
-  if (!name || lower === "unassigned" || lower === "admin") {
+  if (!name || lower === "unassigned" || lower === "admin" || lower === "miranda") {
     return "";
   }
 
@@ -122,6 +122,7 @@ export async function POST(request, { params }) {
       ...thread,
       {
         role: "agent",
+        senderName: resolvedAgentName,
         message,
         createdAt: now,
       },
