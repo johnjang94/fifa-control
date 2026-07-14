@@ -9,7 +9,6 @@ const db = admin.firestore();
 const storage = admin.storage();
 const INVITE_COLLECTION = "invite_requests";
 const INQUIRY_COLLECTION = "support_chat_inquiries";
-const LEGACY_INQUIRY_COLLECTION = "guest_faq_inquiries";
 const DELETE_BATCH_SIZE = 400;
 
 function normalizeString(value) {
@@ -63,13 +62,9 @@ exports.cleanupInviteOnDelete = onDocumentDeleted(
     const phoneNumber = normalizeString(invite.phoneNumber).replace(/\D/g, "");
     const profilePhoto = invite.profilePhoto ?? null;
 
-    const queries = [
-      db.collection(INQUIRY_COLLECTION).where("inviteId", "==", inviteId),
-      db.collection(LEGACY_INQUIRY_COLLECTION).where("inviteId", "==", inviteId),
-    ];
+    const queries = [db.collection(INQUIRY_COLLECTION).where("inviteId", "==", inviteId)];
     if (phoneNumber) {
       queries.push(db.collection(INQUIRY_COLLECTION).where("phoneNumber", "==", phoneNumber));
-      queries.push(db.collection(LEGACY_INQUIRY_COLLECTION).where("phoneNumber", "==", phoneNumber));
     }
 
     for (const query of queries) {

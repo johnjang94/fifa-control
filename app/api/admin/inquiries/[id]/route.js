@@ -5,10 +5,7 @@ import { toInquiryItem } from "../../../../../lib/inquiry";
 import { maybeAppendHumanTimeoutNotice } from "../../../../../lib/human-response";
 import { sendTextSms } from "../../../../../lib/sms";
 import { verifyAdminSession } from "../../../../../lib/admin";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../../lib/support-chat-inquiries";
+import { SUPPORT_CHAT_COLLECTION } from "../../../../../lib/support-chat-inquiries";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -65,12 +62,6 @@ async function resolveInquiryDocRef(db, inquiryKey) {
     return primaryRef;
   }
 
-  const legacyRef = db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(safeKey);
-  const legacySnapshot = await legacyRef.get();
-  if (legacySnapshot.exists) {
-    return legacyRef;
-  }
-
   const fields = ["inviteId", "inviteToken"];
   for (const field of fields) {
     const primaryQuery = await db
@@ -80,15 +71,6 @@ async function resolveInquiryDocRef(db, inquiryKey) {
       .get();
     if (!primaryQuery.empty) {
       return primaryQuery.docs[0].ref;
-    }
-
-    const legacyQuery = await db
-      .collection(LEGACY_SUPPORT_CHAT_COLLECTION)
-      .where(field, "==", safeKey)
-      .limit(1)
-      .get();
-    if (!legacyQuery.empty) {
-      return legacyQuery.docs[0].ref;
     }
   }
 

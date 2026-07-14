@@ -3,10 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../../lib/firestore";
 import { getAuthorizedInvite } from "../../../../../lib/support-access";
 import { maybeAppendHumanTimeoutNotice } from "../../../../../lib/human-response";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../../lib/support-chat-inquiries";
+import { SUPPORT_CHAT_COLLECTION } from "../../../../../lib/support-chat-inquiries";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -41,12 +38,8 @@ export async function POST(request) {
       return json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(ticketId);
-    const primarySnapshot = await primaryRef.get();
-    const docRef = primarySnapshot.exists
-      ? primaryRef
-      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(ticketId);
-    const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
+    const docRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(ticketId);
+    const snapshot = await docRef.get();
     if (!snapshot.exists) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
     }

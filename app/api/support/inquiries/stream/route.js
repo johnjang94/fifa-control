@@ -3,10 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../../lib/firestore";
 import { toInquiryItem } from "../../../../../lib/inquiry";
 import { getAuthorizedInvite } from "../../../../../lib/support-access";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../../lib/support-chat-inquiries";
+import { SUPPORT_CHAT_COLLECTION } from "../../../../../lib/support-chat-inquiries";
 
 const HEADERS = {
   "Content-Type": "text/event-stream; charset=utf-8",
@@ -23,11 +20,6 @@ async function loadInquiry(db, ticketId) {
   const primarySnapshot = await db.collection(SUPPORT_CHAT_COLLECTION).doc(ticketId).get();
   if (primarySnapshot.exists) {
     return toInquiryItem(primarySnapshot.id, primarySnapshot.data() ?? {});
-  }
-
-  const legacySnapshot = await db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(ticketId).get();
-  if (legacySnapshot.exists) {
-    return toInquiryItem(legacySnapshot.id, legacySnapshot.data() ?? {});
   }
 
   return null;

@@ -3,12 +3,8 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../../lib/firestore";
 import { toInquiryItem } from "../../../../../lib/inquiry";
 import { verifyAdminSession } from "../../../../../lib/admin";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../../lib/support-chat-inquiries";
+import { SUPPORT_CHAT_COLLECTION } from "../../../../../lib/support-chat-inquiries";
 
-const COLLECTIONS = [SUPPORT_CHAT_COLLECTION, LEGACY_SUPPORT_CHAT_COLLECTION];
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
@@ -88,15 +84,13 @@ export async function POST(request) {
       );
     }
 
-    const snapshots = await Promise.all(COLLECTIONS.map((collection) => db.collection(collection).get()));
-    const candidates = snapshots
-      .flatMap((snapshot) =>
-        snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ref: doc.ref,
-          data: doc.data() ?? {},
-        })),
-      )
+    const snapshot = await db.collection(SUPPORT_CHAT_COLLECTION).get();
+    const candidates = snapshot.docs
+      .map((doc) => ({
+        id: doc.id,
+        ref: doc.ref,
+        data: doc.data() ?? {},
+      }))
       .filter((item) => hasAgentPlaceholder(item.data));
 
     let updatedCount = 0;

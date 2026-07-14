@@ -2,13 +2,9 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../../lib/firestore";
 import { verifyAdminSession } from "../../../../../lib/admin";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../../lib/support-chat-inquiries";
+import { SUPPORT_CHAT_COLLECTION } from "../../../../../lib/support-chat-inquiries";
 
 const INVITE_COLLECTION = "invite_requests";
-const INQUIRY_COLLECTIONS = [SUPPORT_CHAT_COLLECTION, LEGACY_SUPPORT_CHAT_COLLECTION];
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
@@ -62,19 +58,12 @@ export async function POST(request) {
   }
 
   try {
-    const snapshots = await Promise.all(
-      INQUIRY_COLLECTIONS.map((collection) =>
-        db.collection(collection).orderBy("createdAt", "desc").limit(1000).get(),
-      ),
-    );
-
-    const inquiries = snapshots.flatMap((snapshot) =>
-      snapshot.docs.map((doc) => ({
-        id: `${doc.ref.parent.id}:${doc.id}`,
-        ref: doc.ref,
-        data: doc.data() ?? {},
-      })),
-    );
+    const snapshot = await db.collection(SUPPORT_CHAT_COLLECTION).orderBy("createdAt", "desc").limit(1000).get();
+    const inquiries = snapshot.docs.map((doc) => ({
+      id: `${doc.ref.parent.id}:${doc.id}`,
+      ref: doc.ref,
+      data: doc.data() ?? {},
+    }));
 
     const inviteIds = inquiries
       .map((item) => String(item.data.inviteId ?? "").trim())

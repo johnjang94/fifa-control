@@ -3,10 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../../lib/firestore";
 import { toInquiryItem } from "../../../../../lib/inquiry";
 import { getAuthorizedInvite } from "../../../../../lib/support-access";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../../lib/support-chat-inquiries";
+import { SUPPORT_CHAT_COLLECTION } from "../../../../../lib/support-chat-inquiries";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -34,32 +31,13 @@ export async function GET(request) {
       return json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    let snapshot = await db
+    const snapshot = await db
       .collection(SUPPORT_CHAT_COLLECTION)
       .where("inviteId", "==", authorizedInvite.id)
       .limit(50)
       .get();
 
-    if (snapshot.empty) {
-      snapshot = await db
-        .collection(LEGACY_SUPPORT_CHAT_COLLECTION)
-        .where("phoneNumber", "==", authorizedInvite.phoneNumber)
-        .limit(50)
-        .get();
-    }
-
-    const legacySnapshot = await db
-      .collection(LEGACY_SUPPORT_CHAT_COLLECTION)
-      .where("inviteId", "==", authorizedInvite.id)
-      .limit(50)
-      .get();
-
-    const byId = new Map();
-    for (const doc of [...snapshot.docs, ...legacySnapshot.docs]) {
-      byId.set(doc.id, doc);
-    }
-
-    const inquiries = [...byId.values()]
+    const inquiries = snapshot.docs
       .map((doc) => toInquiryItem(doc.id, doc.data() ?? {}))
       .sort((a, b) => {
         const aTime = new Date(a.createdAt).getTime() || 0;

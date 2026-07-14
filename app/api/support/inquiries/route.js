@@ -14,7 +14,6 @@ import { sendSupportSms, sendTextSms } from "../../../../lib/sms";
 import { getAuthorizedInvite } from "../../../../lib/support-access";
 import { verifyAdminSession } from "../../../../lib/admin";
 import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
   SUPPORT_CHAT_COLLECTION,
 } from "../../../../lib/support-chat-inquiries";
 
@@ -41,12 +40,6 @@ async function getInquiryDocRef(db, ticketId) {
   const primarySnapshot = await primaryRef.get();
   if (primarySnapshot.exists) {
     return primaryRef;
-  }
-
-  const legacyRef = db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(ticketId);
-  const legacySnapshot = await legacyRef.get();
-  if (legacySnapshot.exists) {
-    return legacyRef;
   }
 
   return primaryRef;
@@ -137,14 +130,11 @@ export async function GET(request) {
   }
 
   const primarySnapshot = await db.collection(SUPPORT_CHAT_COLLECTION).doc(ticketId).get();
-  const snapshot = primarySnapshot.exists
-    ? primarySnapshot
-    : await db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(ticketId).get();
-  if (!snapshot.exists) {
+  if (!primarySnapshot.exists) {
     return json({ ok: false, error: "Ticket not found." }, { status: 404 });
   }
 
-  const data = snapshot.data() ?? {};
+  const data = primarySnapshot.data() ?? {};
   const ticketInviteId = String(data.inviteId ?? "").trim();
   const ticketPhoneNumber = String(data.phoneNumber ?? "").replace(/\D/g, "");
   if (ticketInviteId && ticketInviteId !== authorizedInvite.id) {
@@ -156,7 +146,7 @@ export async function GET(request) {
 
   return json({
     ok: true,
-    inquiry: toInquiryItem(snapshot.id, data),
+    inquiry: toInquiryItem(primarySnapshot.id, data),
   });
 }
 
