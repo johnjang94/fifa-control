@@ -13,8 +13,11 @@ import { maybeAppendHumanTimeoutNotice } from "../../../../lib/human-response";
 import { toInviteRequest } from "../../../../lib/invites";
 import { sendSupportSms } from "../../../../lib/sms";
 import { getAuthorizedInvite } from "../../../../lib/support-access";
+import {
+  LEGACY_SUPPORT_CHAT_COLLECTION,
+  SUPPORT_CHAT_COLLECTION,
+} from "../../../../lib/support-chat-inquiries";
 
-const COLLECTION = "guest_faq_inquiries";
 const INVITE_COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -27,6 +30,22 @@ function json(body, init) {
     ...init,
     headers: { "Cache-Control": "no-store", ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
+}
+
+async function getInquiryDocRef(db, ticketId) {
+  const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(ticketId);
+  const primarySnapshot = await primaryRef.get();
+  if (primarySnapshot.exists) {
+    return primaryRef;
+  }
+
+  const legacyRef = db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(ticketId);
+  const legacySnapshot = await legacyRef.get();
+  if (legacySnapshot.exists) {
+    return legacyRef;
+  }
+
+  return primaryRef;
 }
 
 export function OPTIONS() {
@@ -45,7 +64,10 @@ export async function GET(request) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const snapshot = await db.collection(COLLECTION).doc(ticketId).get();
+  const primarySnapshot = await db.collection(SUPPORT_CHAT_COLLECTION).doc(ticketId).get();
+  const snapshot = primarySnapshot.exists
+    ? primarySnapshot
+    : await db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(ticketId).get();
   if (!snapshot.exists) {
     return json({ ok: false, error: "Ticket not found." }, { status: 404 });
   }
@@ -103,7 +125,7 @@ export async function POST(request) {
     let existingTicketCode = "";
 
     if (payload.ticketId) {
-      docRef = db.collection(COLLECTION).doc(payload.ticketId);
+      docRef = await getInquiryDocRef(db, payload.ticketId);
       const snapshot = await docRef.get();
       if (snapshot.exists) {
         const data = snapshot.data() ?? {};
@@ -210,7 +232,7 @@ export async function POST(request) {
     };
 
     if (!docRef) {
-      const created = await db.collection(COLLECTION).add(inquiryData);
+      const created = await db.collection(SUPPORT_CHAT_COLLECTION).add(inquiryData);
       const inquiry = toInquiryItem(created.id, inquiryData);
       await maybeSendSupportSms({
         customerName: smsCustomerName,

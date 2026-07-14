@@ -3,11 +3,15 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../../lib/firestore";
 import { toInquiryItem } from "../../../../../lib/inquiry";
 import { verifyAdminSession } from "../../../../../lib/admin";
+import {
+  LEGACY_SUPPORT_CHAT_COLLECTION,
+  SUPPORT_CHAT_COLLECTION,
+} from "../../../../../lib/support-chat-inquiries";
 
-const COLLECTION = "guest_faq_inquiries";
+const COLLECTIONS = [SUPPORT_CHAT_COLLECTION, LEGACY_SUPPORT_CHAT_COLLECTION];
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-session-id, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
 };
 
@@ -16,16 +20,6 @@ function json(body, init) {
     ...init,
     headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
-}
-
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
-  }
-
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
 }
 
 function normalizeAgentName(value) {
@@ -69,13 +63,19 @@ export function OPTIONS() {
 }
 
 export async function POST(request) {
-  if (!adminKeyMatches(request)) {
+  const db = getDb();
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const sessionCheck = await verifyAdminSession(db, sessionId);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const payload = await request.json().catch(() => ({}));
-    const db = getDb();
     const targetAgentName = await resolveTargetAgentName(db, request, payload);
 
     if (!targetAgentName) {
@@ -88,13 +88,15 @@ export async function POST(request) {
       );
     }
 
-    const snapshot = await db.collection(COLLECTION).get();
-    const candidates = snapshot.docs
-      .map((doc) => ({
-        id: doc.id,
-        ref: doc.ref,
-        data: doc.data() ?? {},
-      }))
+    const snapshots = await Promise.all(COLLECTIONS.map((collection) => db.collection(collection).get()));
+    const candidates = snapshots
+      .flatMap((snapshot) =>
+        snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ref: doc.ref,
+          data: doc.data() ?? {},
+        })),
+      )
       .filter((item) => hasAgentPlaceholder(item.data));
 
     let updatedCount = 0;
@@ -120,7 +122,7 @@ export async function POST(request) {
     return json({
       ok: true,
       targetAgentName,
-      scannedCount: snapshot.size,
+      scannedCount: candidates.length,
       updatedCount,
       sample,
     });

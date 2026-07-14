@@ -13,7 +13,7 @@ const WELCOME_SMS_DELIVERY_STATUS = {
 };
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-session-id, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
 };
 
@@ -25,16 +25,6 @@ function json(body, init) {
       ...(init?.headers ?? {}),
     },
   });
-}
-
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
-  }
-
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
 }
 
 async function adminSessionMatches(db, request) {
@@ -61,7 +51,7 @@ export async function POST(request) {
 
     const db = getDb();
     const sessionCheck = await adminSessionMatches(db, request);
-    if (!sessionCheck.ok && !adminKeyMatches(request)) {
+    if (!sessionCheck.ok) {
       return json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 

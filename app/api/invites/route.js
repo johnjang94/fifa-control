@@ -5,11 +5,12 @@ import { deleteInviteAndRelatedInquiries, findInviteRef } from "../../../lib/inv
 import { buildWelcomeSmsMessage, parseInvitePayload, toInviteRequest } from "../../../lib/invites";
 import { getInviteSettings } from "../../../lib/settings";
 import { sendAdminSms, sendTextSms } from "../../../lib/sms";
+import { verifyAdminSession } from "../../../lib/admin";
 
 const COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
 };
 
@@ -23,14 +24,13 @@ function json(body, init) {
   });
 }
 
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
+async function adminSessionMatches(request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return { ok: false };
   }
 
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
+  return verifyAdminSession(getDb(), sessionId);
 }
 
 async function getInviteState() {
@@ -218,8 +218,14 @@ export async function POST(request) {
 
 export async function GET(request) {
   const { inviteCount, capacity, isFull, snapshot } = await getInviteState();
+  const sessionCheck = await adminSessionMatches(request);
+  const hasSessionHeader = Boolean(String(request.headers.get("x-admin-session-id") ?? "").trim());
 
-  if (!adminKeyMatches(request)) {
+  if (hasSessionHeader && !sessionCheck.ok) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (!sessionCheck.ok) {
     return json({
       ok: true,
       inviteCount,
@@ -247,6 +253,11 @@ export async function GET(request) {
 
 export async function PATCH(request) {
   try {
+    const sessionCheck = await adminSessionMatches(request);
+    if (!sessionCheck.ok) {
+      return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
     const payload = await request.json();
     const inviteToken = String(payload?.inviteToken ?? "").trim();
     const rsvp = normalizeRsvpValue(payload?.rsvp);
@@ -330,7 +341,8 @@ export async function PATCH(request) {
 }
 
 export async function DELETE(request) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 

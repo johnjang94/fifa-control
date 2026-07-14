@@ -4,7 +4,7 @@ import { createAdminSession, parseAdminAuthPayload, verifyAdminIdentity } from "
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
 };
 

@@ -4,11 +4,15 @@ import { getDb } from "../../../../../lib/firestore";
 import { toInquiryItem } from "../../../../../lib/inquiry";
 import { maybeAppendHumanTimeoutNotice } from "../../../../../lib/human-response";
 import { sendTextSms } from "../../../../../lib/sms";
+import { verifyAdminSession } from "../../../../../lib/admin";
+import {
+  LEGACY_SUPPORT_CHAT_COLLECTION,
+  SUPPORT_CHAT_COLLECTION,
+} from "../../../../../lib/support-chat-inquiries";
 
-const COLLECTION = "guest_faq_inquiries";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "POST,PATCH,OPTIONS",
 };
 
@@ -19,14 +23,14 @@ function json(body, init) {
   });
 }
 
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
+async function adminSessionMatches(request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return { ok: false };
   }
 
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
+  const result = await verifyAdminSession(getDb(), sessionId);
+  return result.ok ? { ok: true, session: result.session } : { ok: false };
 }
 
 function buildHumanConnectionSmsMessage(managerName) {
@@ -54,7 +58,8 @@ export function OPTIONS() {
 }
 
 export async function POST(request, { params }) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
@@ -66,8 +71,13 @@ export async function POST(request, { params }) {
       return json({ ok: false, error: "message is required." }, { status: 400 });
     }
 
-    const docRef = getDb().collection(COLLECTION).doc(params.id);
-    const snapshot = await docRef.get();
+    const db = getDb();
+    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(params.id);
+    const primarySnapshot = await primaryRef.get();
+    const docRef = primarySnapshot.exists
+      ? primaryRef
+      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(params.id);
+    const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
     if (!snapshot.exists) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
     }
@@ -132,13 +142,19 @@ export async function POST(request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const docRef = getDb().collection(COLLECTION).doc(params.id);
-    const snapshot = await docRef.get();
+    const db = getDb();
+    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(params.id);
+    const primarySnapshot = await primaryRef.get();
+    const docRef = primarySnapshot.exists
+      ? primaryRef
+      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(params.id);
+    const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
     if (!snapshot.exists) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
     }

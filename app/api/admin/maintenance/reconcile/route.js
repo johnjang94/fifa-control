@@ -1,31 +1,25 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../../lib/firestore";
+import { verifyAdminSession } from "../../../../../lib/admin";
+import {
+  LEGACY_SUPPORT_CHAT_COLLECTION,
+  SUPPORT_CHAT_COLLECTION,
+} from "../../../../../lib/support-chat-inquiries";
 
 const INVITE_COLLECTION = "invite_requests";
-const INQUIRY_COLLECTION = "guest_faq_inquiries";
+const INQUIRY_COLLECTIONS = [SUPPORT_CHAT_COLLECTION, LEGACY_SUPPORT_CHAT_COLLECTION];
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "POST,OPTIONS",
 };
-const MAX_INQUIRIES = 1000;
 
 function json(body, init) {
   return NextResponse.json(body, {
     ...init,
     headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
-}
-
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
-  }
-
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
 }
 
 async function getInviteSnapshotsById(db, inviteIds) {
@@ -56,23 +50,31 @@ export function OPTIONS() {
 }
 
 export async function POST(request) {
-  if (!adminKeyMatches(request)) {
+  const db = getDb();
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const sessionCheck = await verifyAdminSession(db, sessionId);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const db = getDb();
-    const snapshot = await db
-      .collection(INQUIRY_COLLECTION)
-      .orderBy("createdAt", "desc")
-      .limit(MAX_INQUIRIES)
-      .get();
+    const snapshots = await Promise.all(
+      INQUIRY_COLLECTIONS.map((collection) =>
+        db.collection(collection).orderBy("createdAt", "desc").limit(1000).get(),
+      ),
+    );
 
-    const inquiries = snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ref: doc.ref,
-      data: doc.data() ?? {},
-    }));
+    const inquiries = snapshots.flatMap((snapshot) =>
+      snapshot.docs.map((doc) => ({
+        id: `${doc.ref.parent.id}:${doc.id}`,
+        ref: doc.ref,
+        data: doc.data() ?? {},
+      })),
+    );
 
     const inviteIds = inquiries
       .map((item) => String(item.data.inviteId ?? "").trim())

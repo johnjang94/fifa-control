@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/firestore";
 import { toInquiryItem } from "../../../../lib/inquiry";
+import { verifyAdminSession } from "../../../../lib/admin";
+import {
+  LEGACY_SUPPORT_CHAT_COLLECTION,
+  SUPPORT_CHAT_COLLECTION,
+} from "../../../../lib/support-chat-inquiries";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "GET,OPTIONS",
 };
 
@@ -16,11 +21,37 @@ export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
-export async function GET() {
-  const snapshot = await getDb().collection("guest_faq_inquiries").orderBy("createdAt", "desc").limit(100).get();
-  return json({
-    ok: true,
-    inquiries: snapshot.docs.map((doc) => toInquiryItem(doc.id, doc.data())),
-  });
+async function adminSessionMatches(request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return { ok: false };
+  }
+
+  return verifyAdminSession(getDb(), sessionId);
 }
 
+export async function GET(request) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const db = getDb();
+  const [primarySnapshot, legacySnapshot] = await Promise.all([
+    db.collection(SUPPORT_CHAT_COLLECTION).orderBy("createdAt", "desc").limit(100).get(),
+    db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).orderBy("createdAt", "desc").limit(100).get(),
+  ]);
+
+  const merged = new Map();
+  for (const doc of [...primarySnapshot.docs, ...legacySnapshot.docs]) {
+    merged.set(doc.id, doc);
+  }
+
+  return json({
+    ok: true,
+    inquiries: [...merged.values()]
+      .map((doc) => toInquiryItem(doc.id, doc.data()))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 100),
+  });
+}

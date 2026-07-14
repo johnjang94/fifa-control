@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/firestore";
 import { deleteInviteAndRelatedInquiries } from "../../../../lib/invite-deletion";
 import { toInviteRequest } from "../../../../lib/invites";
+import { verifyAdminSession } from "../../../../lib/admin";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "GET,DELETE,OPTIONS",
 };
 
@@ -13,14 +14,13 @@ function json(body, init) {
   return NextResponse.json(body, { ...init, headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) } });
 }
 
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
+async function adminSessionMatches(request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return { ok: false };
   }
 
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
+  return verifyAdminSession(getDb(), sessionId);
 }
 
 export function OPTIONS() {
@@ -30,6 +30,13 @@ export function OPTIONS() {
 export async function GET(request) {
   const token = (request.nextUrl.searchParams.get("token") ?? "").trim();
   const barcode = (request.nextUrl.searchParams.get("barcode") ?? "").trim();
+  if (!token && !barcode) {
+    const sessionCheck = await adminSessionMatches(request);
+    if (!sessionCheck.ok) {
+      return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
   if (token || barcode) {
     if (token) {
       const snapshot = await getDb().collection("invite_requests").doc(token).get();
@@ -75,7 +82,8 @@ export async function GET(request) {
 }
 
 export async function PATCH(request) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
@@ -134,7 +142,8 @@ export async function PATCH(request) {
 }
 
 export async function DELETE(request) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 

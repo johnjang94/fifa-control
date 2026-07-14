@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "../../../lib/firestore";
+import { verifyAdminSession } from "../../../lib/admin";
 import { getInviteSettings, setInviteCapacity } from "../../../lib/settings";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, x-admin-key",
+  "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
   "Access-Control-Allow-Methods": "GET,PUT,OPTIONS",
 };
 
@@ -19,14 +20,13 @@ function json(body, init) {
   });
 }
 
-function adminKeyMatches(request) {
-  const expected = process.env.ADMIN_ACCESS_KEY;
-  if (!expected) {
-    return true;
+async function adminSessionMatches(request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return { ok: false };
   }
 
-  const provided = request.headers.get("x-admin-key") ?? "";
-  return provided === expected;
+  return verifyAdminSession(getDb(), sessionId);
 }
 
 export function OPTIONS() {
@@ -37,7 +37,8 @@ export function OPTIONS() {
 }
 
 export async function GET(request) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
@@ -50,7 +51,8 @@ export async function GET(request) {
 }
 
 export async function PUT(request) {
-  if (!adminKeyMatches(request)) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
