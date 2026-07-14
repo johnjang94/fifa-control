@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../lib/firestore";
 import {
-  buildAutoReply,
   buildSupportReason,
   buildSupportThreadTitle,
   createTicketCode,
@@ -11,8 +10,9 @@ import {
 } from "../../../../lib/inquiry";
 import { maybeAppendHumanTimeoutNotice } from "../../../../lib/human-response";
 import { toInviteRequest } from "../../../../lib/invites";
-import { sendSupportSms } from "../../../../lib/sms";
+import { sendSupportSms, sendTextSms } from "../../../../lib/sms";
 import { getAuthorizedInvite } from "../../../../lib/support-access";
+import { verifyAdminSession } from "../../../../lib/admin";
 import {
   LEGACY_SUPPORT_CHAT_COLLECTION,
   SUPPORT_CHAT_COLLECTION,
@@ -21,7 +21,7 @@ import {
 const INVITE_COLLECTION = "invite_requests";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "content-type, authorization, x-support-access-token",
+  "Access-Control-Allow-Headers": "content-type, authorization, x-support-access-token, x-admin-session-id",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 };
 
@@ -30,6 +30,10 @@ function json(body, init) {
     ...init,
     headers: { "Cache-Control": "no-store", ...CORS_HEADERS, ...(init?.headers ?? {}) },
   });
+}
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 async function getInquiryDocRef(db, ticketId) {
@@ -46,6 +50,74 @@ async function getInquiryDocRef(db, ticketId) {
   }
 
   return primaryRef;
+}
+
+async function getAuthorizedAdmin(request) {
+  const sessionId = String(request.headers.get("x-admin-session-id") ?? "").trim();
+  if (!sessionId) {
+    return null;
+  }
+
+  const result = await verifyAdminSession(getDb(), sessionId);
+  if (!result.ok) {
+    return null;
+  }
+
+  return result.session;
+}
+
+function buildSupportSmsMessage({ customerName, requestReason, isNewTicket, wantsHumanSupport }) {
+  const displayName = typeof customerName === "string" ? customerName.trim() : "";
+  const subject = displayName ? `${displayName} ` : "";
+  const reason = typeof requestReason === "string" ? requestReason.trim() : "";
+  const reasonSuffix = reason ? ` Reason: ${reason.slice(0, 140)}` : "";
+
+  if (isNewTicket) {
+    return `Host alert: ${subject}started a new support chat.${reasonSuffix}`;
+  }
+
+  if (wantsHumanSupport) {
+    return `Host alert: ${subject}asked for live support in the chat.${reasonSuffix}`;
+  }
+
+  return `Host alert: ${subject}sent a support message.${reasonSuffix}`;
+}
+
+function buildCustomerReplySmsMessage(agentName) {
+  const name = String(agentName ?? "").trim() || "an admin";
+  return `You've received a reply from ${name}.`;
+}
+
+function formatAdminName(session, fallback = "Admin") {
+  const firstName = normalizeString(session?.firstName);
+  const lastName = normalizeString(session?.lastName);
+  return [firstName, lastName].filter(Boolean).join(" ").trim() || fallback;
+}
+
+async function maybeSendSupportSms({
+  customerName,
+  requestReason,
+  wantsHumanSupport,
+  isNewTicket,
+  existingHumanRequestedAt,
+}) {
+  const shouldNotify = isNewTicket || (wantsHumanSupport && !existingHumanRequestedAt);
+  if (!shouldNotify) {
+    return;
+  }
+
+  try {
+    await sendSupportSms(
+      buildSupportSmsMessage({
+        customerName,
+        requestReason,
+        isNewTicket,
+        wantsHumanSupport,
+      }),
+    );
+  } catch {
+    // SMS notifications are best effort only.
+  }
 }
 
 export function OPTIONS() {
@@ -92,28 +164,23 @@ export async function POST(request) {
   try {
     const payload = parseSupportPayload(await request.json());
     const db = getDb();
-    const authorizedInvite = await getAuthorizedInvite(db, request);
-    if (!authorizedInvite) {
+    const adminSession = await getAuthorizedAdmin(request);
+    const senderRole = normalizeString(payload.senderRole).toLowerCase();
+    const isAgentMessage = Boolean(adminSession) && senderRole === "agent";
+    const authorizedInvite = isAgentMessage ? null : await getAuthorizedInvite(db, request);
+
+    if (!adminSession && !authorizedInvite) {
       return json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
-    const inviteSnapshot = await db.collection(INVITE_COLLECTION).doc(authorizedInvite.id).get();
-    const invite = inviteSnapshot.exists ? toInviteRequest(inviteSnapshot.id, inviteSnapshot.data() ?? {}) : null;
-    const inviteName = invite ? `${invite.firstName} ${invite.lastName}`.trim() : "";
-    const invitePhone = invite?.phoneNumber || "";
-    const customerName = payload.contactName || inviteName || invitePhone || "Unknown guest";
-    const smsCustomerName =
-      payload.contactName ||
-      inviteName ||
-      invitePhone ||
-      authorizedInvite.phoneNumber ||
-      "";
-    const customerPhotoUrl = invite?.profilePhotoUrl ?? null;
-    const phoneNumber = authorizedInvite.phoneNumber || invitePhone || "";
+    const currentMessage = String(payload.message ?? "");
+    const now = new Date();
 
     let docRef = null;
+    let existingData = {};
     let existingThread = [];
     let existingQuestion = "";
+    let existingAnswer = "";
     let existingStatus = "open";
     let existingCurrentAgent = "Unassigned";
     let existingAssignedTo = "Unassigned";
@@ -123,32 +190,46 @@ export async function POST(request) {
     let existingHumanConnectionSmsSentAt = null;
     let existingHumanTimeoutNoticeAt = null;
     let existingTicketCode = "";
+    let inviteName = "";
+    let invitePhone = "";
+    let customerPhotoUrl = null;
+    let phoneNumber = "";
+
+    if (authorizedInvite) {
+      const inviteSnapshot = await db.collection(INVITE_COLLECTION).doc(authorizedInvite.id).get();
+      const invite = inviteSnapshot.exists ? toInviteRequest(inviteSnapshot.id, inviteSnapshot.data() ?? {}) : null;
+      inviteName = invite ? `${invite.firstName} ${invite.lastName}`.trim() : "";
+      invitePhone = invite?.phoneNumber || "";
+      customerPhotoUrl = invite?.profilePhotoUrl ?? null;
+      phoneNumber = authorizedInvite.phoneNumber || invitePhone || "";
+    }
 
     if (payload.ticketId) {
       docRef = await getInquiryDocRef(db, payload.ticketId);
       const snapshot = await docRef.get();
       if (snapshot.exists) {
-        const data = snapshot.data() ?? {};
-        const ticketInviteId = String(data.inviteId ?? "").trim();
-        const ticketPhoneNumber = String(data.phoneNumber ?? "").replace(/\D/g, "");
-        if (ticketInviteId && ticketInviteId !== authorizedInvite.id) {
+        existingData = snapshot.data() ?? {};
+        const ticketInviteId = String(existingData.inviteId ?? "").trim();
+        const ticketPhoneNumber = String(existingData.phoneNumber ?? "").replace(/\D/g, "");
+        if (authorizedInvite && ticketInviteId && ticketInviteId !== authorizedInvite.id) {
           return json({ ok: false, error: "Unauthorized" }, { status: 403 });
         }
-        if (!ticketInviteId && ticketPhoneNumber && ticketPhoneNumber !== authorizedInvite.phoneNumber) {
+        if (authorizedInvite && !ticketInviteId && ticketPhoneNumber && ticketPhoneNumber !== authorizedInvite.phoneNumber) {
           return json({ ok: false, error: "Unauthorized" }, { status: 403 });
         }
-        existingThread = Array.isArray(data.thread) ? data.thread : [];
-        existingQuestion = String(data.question ?? "");
-        existingStatus = String(data.status ?? "open");
-        existingCurrentAgent = String(data.currentAgent ?? "Unassigned");
-        existingAssignedTo = String(data.assignedTo ?? "Unassigned");
-        existingCreatedAt = data.createdAt ?? null;
-        existingHumanRequestedAt = data.humanRequestedAt ?? null;
-        existingHumanAcknowledgedAt = data.humanAcknowledgedAt ?? null;
-        existingHumanConnectionSmsSentAt = data.humanConnectionSmsSentAt ?? null;
-        existingHumanTimeoutNoticeAt = data.humanTimeoutNoticeAt ?? null;
-        existingTicketCode = String(data.ticketCode ?? "").trim();
-        const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
+        existingThread = Array.isArray(existingData.thread) ? existingData.thread : [];
+        existingQuestion = String(existingData.question ?? "");
+        existingAnswer = String(existingData.answer ?? "");
+        existingStatus = String(existingData.status ?? "open");
+        existingCurrentAgent = String(existingData.currentAgent ?? "Unassigned");
+        existingAssignedTo = String(existingData.assignedTo ?? "Unassigned");
+        existingCreatedAt = existingData.createdAt ?? null;
+        existingHumanRequestedAt = existingData.humanRequestedAt ?? null;
+        existingHumanAcknowledgedAt = existingData.humanAcknowledgedAt ?? null;
+        existingHumanConnectionSmsSentAt = existingData.humanConnectionSmsSentAt ?? null;
+        existingHumanTimeoutNoticeAt = existingData.humanTimeoutNoticeAt ?? null;
+        existingTicketCode = String(existingData.ticketCode ?? "").trim();
+        const timeoutCheck = maybeAppendHumanTimeoutNotice(existingData);
         if (timeoutCheck.appended) {
           existingThread = Array.isArray(timeoutCheck.data.thread) ? timeoutCheck.data.thread : existingThread;
           existingHumanRequestedAt = timeoutCheck.data.humanRequestedAt ?? existingHumanRequestedAt;
@@ -162,192 +243,140 @@ export async function POST(request) {
           existingAssignedTo = timeoutCheck.data.assignedTo ?? existingAssignedTo;
           existingCreatedAt = timeoutCheck.data.createdAt ?? existingCreatedAt;
           existingTicketCode = timeoutCheck.data.ticketCode ?? existingTicketCode;
+          existingData = timeoutCheck.data;
         }
-      } else {
-        docRef = null;
+      } else if (isAgentMessage) {
+        return json({ ok: false, error: "Ticket not found." }, { status: 404 });
       }
     }
 
-    const requestReason = payload.wantsHumanSupport
-      ? await buildSupportReason(payload.message, customerName, existingThread)
-      : "";
-
-    const reply =
-      payload.requestType === "food_request"
-        ? {
-            topic: "food_request_submission",
-            answer: "Thanks. Your request has been sent to the host.",
-            suggestedAction: "none",
-          }
-        : await buildAutoReply(payload.message, customerName, existingThread);
+    const guestName = isAgentMessage
+      ? normalizeString(existingData.customer) || inviteName || "Unknown guest"
+      : payload.contactName || inviteName || invitePhone || "Unknown guest";
+    const agentName = isAgentMessage ? formatAdminName(adminSession, normalizeString(payload.contactName) || "Admin") : "";
+    const customerName = guestName;
+    const requestReason = isAgentMessage
+      ? String(existingData.requestReason ?? "")
+      : await buildSupportReason(currentMessage, customerName, existingThread);
     const nextThread = [
       ...existingThread,
       {
-        role: "customer",
-        message: payload.message,
-        createdAt: new Date().toISOString(),
-      },
-      {
-        role: "assistant",
-        message: reply.answer,
-        createdAt: new Date().toISOString(),
+        role: isAgentMessage ? "agent" : "customer",
+        message: currentMessage,
+        createdAt: now.toISOString(),
       },
     ];
-    const currentMessage = String(payload.message ?? "");
-    const summaryTitle = await buildSupportThreadTitle({
-      message: currentMessage,
-      question: existingQuestion || currentMessage,
-      answer: reply.answer,
-      customerName,
-      existingThread: nextThread,
-    });
+
+    const summaryTitle =
+      String(existingData.summaryTitle ?? "").trim() ||
+      (await buildSupportThreadTitle({
+        message: currentMessage,
+        question: existingQuestion || currentMessage,
+        answer: existingAnswer,
+        customerName,
+        existingThread: nextThread,
+      }));
+
+    const nextHumanRequestedAt = isAgentMessage ? existingHumanRequestedAt : existingHumanRequestedAt ?? now;
+    const nextHumanAcknowledgedAt = isAgentMessage ? existingHumanAcknowledgedAt ?? now : existingHumanAcknowledgedAt ?? null;
+    const nextStatus = isAgentMessage ? "in progress" : existingStatus || "open";
+    const nextCurrentAgent = isAgentMessage
+      ? agentName || existingCurrentAgent || "Admin"
+      : existingCurrentAgent || "Unassigned";
+    const nextAssignedTo = isAgentMessage ? nextCurrentAgent || "Admin" : existingAssignedTo || "Unassigned";
+
+    const nextPhoneNumber = isAgentMessage
+      ? String(existingData.phoneNumber ?? invitePhone ?? "").trim()
+      : authorizedInvite?.phoneNumber || invitePhone || "";
+    const nextCustomerPhotoUrl = isAgentMessage
+      ? existingData.customerPhotoUrl ?? invite?.profilePhotoUrl ?? null
+      : customerPhotoUrl;
+    const nextContactPhoneNumber = isAgentMessage
+      ? String(existingData.contactPhoneNumber ?? nextPhoneNumber ?? "").trim()
+      : authorizedInvite?.phoneNumber ?? String(existingData.contactPhoneNumber ?? "");
 
     const inquiryData = {
-      inviteId: authorizedInvite.id,
+      inviteId: authorizedInvite?.id ?? String(existingData.inviteId ?? payload.ticketId ?? ""),
       customer: customerName,
-      customerPhotoUrl,
-      phoneNumber,
-      inviteToken: authorizedInvite.id,
-      contactPhoneNumber: authorizedInvite.phoneNumber,
+      customerPhotoUrl: nextCustomerPhotoUrl,
+      phoneNumber: nextPhoneNumber,
+      inviteToken: authorizedInvite?.id ?? String(existingData.inviteToken ?? ""),
+      contactPhoneNumber: nextContactPhoneNumber,
       question: existingQuestion || currentMessage,
-      answer: reply.answer,
-      status: payload.wantsHumanSupport ? "human requested" : existingStatus || "open",
-      currentAgent: existingCurrentAgent || "Unassigned",
-      assignedTo: existingAssignedTo || "Unassigned",
-      humanRequestedAt:
-        existingHumanRequestedAt ?? (payload.wantsHumanSupport ? new Date() : null),
-      humanAcknowledgedAt: existingHumanAcknowledgedAt ?? null,
+      answer: isAgentMessage ? currentMessage : existingAnswer,
+      status: nextStatus,
+      currentAgent: nextCurrentAgent,
+      assignedTo: nextAssignedTo,
+      humanRequestedAt: nextHumanRequestedAt,
+      humanAcknowledgedAt: nextHumanAcknowledgedAt,
       humanConnectionSmsSentAt: existingHumanConnectionSmsSentAt ?? null,
       humanTimeoutNoticeAt: existingHumanTimeoutNoticeAt ?? null,
-      topic: reply.topic,
-      suggestedAction: reply.suggestedAction,
+      topic: "support",
+      suggestedAction: "none",
       requestReason,
       ticketCode: existingTicketCode || createTicketCode(),
       summaryTitle,
       thread: nextThread,
-      supportChatActiveAt: new Date(),
+      supportChatActiveAt: now,
       supportChatState: "active",
-      updatedAt: new Date(),
-      createdAt: existingCreatedAt ?? new Date(),
+      updatedAt: now,
+      createdAt: existingCreatedAt ?? now,
     };
 
     if (!docRef) {
       const created = await db.collection(SUPPORT_CHAT_COLLECTION).add(inquiryData);
       const inquiry = toInquiryItem(created.id, inquiryData);
       await maybeSendSupportSms({
-        customerName: smsCustomerName,
-        requestType: payload.requestType,
-        humanRequested: payload.wantsHumanSupport,
+        customerName,
         requestReason,
-        topic: reply.topic,
-        suggestedAction: reply.suggestedAction,
+        wantsHumanSupport: payload.wantsHumanSupport,
         isNewTicket: true,
-        existingStatus: "open",
-        acknowledgedAt: null,
-        humanRequestedAt: inquiryData.humanRequestedAt,
+        existingHumanRequestedAt: null,
       });
       return json({
         ok: true,
         inquiry,
         ticketId: created.id,
-        topic: reply.topic,
-        suggestedAction: reply.suggestedAction,
+        topic: "support",
+        suggestedAction: "none",
       });
     }
 
     await docRef.set(inquiryData, { merge: true });
     const inquiry = toInquiryItem(payload.ticketId, inquiryData);
-    await maybeSendSupportSms({
-      customerName: smsCustomerName,
-      requestType: payload.requestType,
-      humanRequested: payload.wantsHumanSupport,
-      requestReason,
-      topic: reply.topic,
-      suggestedAction: reply.suggestedAction,
-      isNewTicket: false,
-      existingStatus,
-      acknowledgedAt: existingHumanAcknowledgedAt,
-      humanRequestedAt: existingHumanRequestedAt,
-    });
+    if (isAgentMessage) {
+      const targetPhoneNumber = String(nextPhoneNumber ?? "").replace(/\D/g, "");
+      if (targetPhoneNumber) {
+        try {
+          await sendTextSms({
+            to: targetPhoneNumber,
+            message: buildCustomerReplySmsMessage(customerName),
+          });
+          if (!existingHumanConnectionSmsSentAt) {
+            inquiryData.humanConnectionSmsSentAt = now;
+          }
+        } catch {
+          // Best effort only.
+        }
+      }
+    } else {
+      await maybeSendSupportSms({
+        customerName,
+        requestReason,
+        wantsHumanSupport: payload.wantsHumanSupport,
+        isNewTicket: false,
+        existingHumanRequestedAt,
+      });
+    }
     return json({
       ok: true,
       inquiry,
       ticketId: payload.ticketId,
-      topic: reply.topic,
-      suggestedAction: reply.suggestedAction,
+      topic: "support",
+      suggestedAction: "none",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save inquiry.";
     return json({ ok: false, error: message }, { status: 400 });
-  }
-}
-
-function buildSupportSmsMessage({
-  customerName,
-  humanRequested,
-  requestType,
-  requestReason,
-  topic,
-  suggestedAction,
-}) {
-  const displayName = typeof customerName === "string" ? customerName.trim() : "";
-  const subject = displayName ? `${displayName} ` : "";
-  const reason = humanRequested && typeof requestReason === "string" ? requestReason.trim() : "";
-  const reasonSuffix = reason ? ` Reason: ${reason.slice(0, 140)}` : "";
-
-  if (
-    requestType === "food_request" ||
-    topic === "bring_food" ||
-    suggestedAction === "food_request_confirmation" ||
-    suggestedAction === "food_request_form"
-  ) {
-    return `Host alert: ${subject}requested to bring food, snacks, or drinks in the support channel.${reasonSuffix}`;
-  }
-
-  if (humanRequested) {
-    return `Host alert: ${subject}requested a live conversation in the support channel.${reasonSuffix}`;
-  }
-
-  return `Host alert: ${subject}is chatting with the support bot.${reasonSuffix}`;
-}
-
-async function maybeSendSupportSms({
-  customerName,
-  requestType,
-  humanRequested,
-  requestReason,
-  topic,
-  suggestedAction,
-  isNewTicket,
-  existingStatus,
-  acknowledgedAt,
-  humanRequestedAt,
-}) {
-  const hasHumanAlert = Boolean(humanRequestedAt);
-  const shouldNotify =
-    requestType === "food_request" ||
-    topic === "bring_food" ||
-    suggestedAction === "food_request_confirmation" ||
-    suggestedAction === "food_request_form" ||
-    isNewTicket ||
-    (humanRequested && !acknowledgedAt && !hasHumanAlert && existingStatus !== "human requested");
-
-  if (!shouldNotify) {
-    return;
-  }
-
-  try {
-    await sendSupportSms(
-      buildSupportSmsMessage({
-        customerName,
-        requestType,
-        humanRequested,
-        requestReason,
-        topic,
-        suggestedAction,
-      }),
-    );
-  } catch {
-    // SMS notifications are best effort only.
   }
 }
