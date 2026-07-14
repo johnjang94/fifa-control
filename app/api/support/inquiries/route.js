@@ -10,6 +10,7 @@ import {
 } from "../../../../lib/inquiry";
 import { maybeAppendHumanTimeoutNotice } from "../../../../lib/human-response";
 import { toInviteRequest } from "../../../../lib/invites";
+import { publishRealtimeInquiryUpdate } from "../../../../lib/realtime";
 import { sendSupportSms, sendTextSms } from "../../../../lib/sms";
 import { getAuthorizedInvite } from "../../../../lib/support-access";
 import { verifyAdminSession } from "../../../../lib/admin";
@@ -333,7 +334,6 @@ export async function POST(request) {
     }
 
     await docRef.set(inquiryData, { merge: true });
-    const inquiry = toInquiryItem(payload.ticketId, inquiryData);
     if (isAgentMessage) {
       const targetPhoneNumber = String(nextPhoneNumber ?? "").replace(/\D/g, "");
       if (targetPhoneNumber) {
@@ -358,10 +358,14 @@ export async function POST(request) {
         existingHumanRequestedAt,
       });
     }
+
+    const inquiry = toInquiryItem(docRef.id, inquiryData);
+    await publishRealtimeInquiryUpdate(inquiry.id, inquiry);
+
     return json({
       ok: true,
       inquiry,
-      ticketId: payload.ticketId,
+      ticketId: docRef.id,
       topic: "support",
       suggestedAction: "none",
     });
