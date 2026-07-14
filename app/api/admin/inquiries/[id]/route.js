@@ -64,6 +64,11 @@ export async function POST(request, { params }) {
   }
 
   try {
+    const inquiryId = String(params?.id ?? "").trim();
+    if (!inquiryId) {
+      return json({ ok: false, error: "Inquiry id is required." }, { status: 400 });
+    }
+
     const payload = await request.json();
     const message = typeof payload?.message === "string" ? payload.message.trim() : "";
 
@@ -72,11 +77,11 @@ export async function POST(request, { params }) {
     }
 
     const db = getDb();
-    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(params.id);
+    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(inquiryId);
     const primarySnapshot = await primaryRef.get();
     const docRef = primarySnapshot.exists
       ? primaryRef
-      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(params.id);
+      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(inquiryId);
     const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
     if (!snapshot.exists) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
@@ -133,7 +138,7 @@ export async function POST(request, { params }) {
 
     return json({
       ok: true,
-      inquiry: toInquiryItem(params.id, nextData),
+      inquiry: toInquiryItem(inquiryId, nextData),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update inquiry.";
@@ -148,12 +153,17 @@ export async function PATCH(request, { params }) {
   }
 
   try {
+    const inquiryId = String(params?.id ?? "").trim();
+    if (!inquiryId) {
+      return json({ ok: false, error: "Inquiry id is required." }, { status: 400 });
+    }
+
     const db = getDb();
-    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(params.id);
+    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(inquiryId);
     const primarySnapshot = await primaryRef.get();
     const docRef = primarySnapshot.exists
       ? primaryRef
-      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(params.id);
+      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(inquiryId);
     const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
     if (!snapshot.exists) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
@@ -190,7 +200,7 @@ export async function PATCH(request, { params }) {
 
     return json({
       ok: true,
-      inquiry: toInquiryItem(params.id, nextData),
+      inquiry: toInquiryItem(inquiryId, nextData),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update inquiry.";

@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/firestore";
-import { toInquiryItem } from "../../../../lib/inquiry";
 import { verifyAdminSession } from "../../../../lib/admin";
-import {
-  LEGACY_SUPPORT_CHAT_COLLECTION,
-  SUPPORT_CHAT_COLLECTION,
-} from "../../../../lib/support-chat-inquiries";
+import { listAdminInquiries } from "../../../../lib/admin-inquiries";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -36,22 +32,8 @@ export async function GET(request) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const db = getDb();
-  const [primarySnapshot, legacySnapshot] = await Promise.all([
-    db.collection(SUPPORT_CHAT_COLLECTION).orderBy("createdAt", "desc").limit(100).get(),
-    db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).orderBy("createdAt", "desc").limit(100).get(),
-  ]);
-
-  const merged = new Map();
-  for (const doc of [...primarySnapshot.docs, ...legacySnapshot.docs]) {
-    merged.set(doc.id, doc);
-  }
-
   return json({
     ok: true,
-    inquiries: [...merged.values()]
-      .map((doc) => toInquiryItem(doc.id, doc.data()))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 100),
+    inquiries: await listAdminInquiries(getDb(), { limit: 100 }),
   });
 }
