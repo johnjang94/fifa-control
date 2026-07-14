@@ -53,6 +53,48 @@ function normalizeAgentName(value) {
   return name;
 }
 
+async function resolveInquiryDocRef(db, inquiryKey) {
+  const safeKey = String(inquiryKey ?? "").trim();
+  if (!safeKey) {
+    return null;
+  }
+
+  const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(safeKey);
+  const primarySnapshot = await primaryRef.get();
+  if (primarySnapshot.exists) {
+    return primaryRef;
+  }
+
+  const legacyRef = db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(safeKey);
+  const legacySnapshot = await legacyRef.get();
+  if (legacySnapshot.exists) {
+    return legacyRef;
+  }
+
+  const fields = ["inviteId", "inviteToken"];
+  for (const field of fields) {
+    const primaryQuery = await db
+      .collection(SUPPORT_CHAT_COLLECTION)
+      .where(field, "==", safeKey)
+      .limit(1)
+      .get();
+    if (!primaryQuery.empty) {
+      return primaryQuery.docs[0].ref;
+    }
+
+    const legacyQuery = await db
+      .collection(LEGACY_SUPPORT_CHAT_COLLECTION)
+      .where(field, "==", safeKey)
+      .limit(1)
+      .get();
+    if (!legacyQuery.empty) {
+      return legacyQuery.docs[0].ref;
+    }
+  }
+
+  return null;
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -64,8 +106,8 @@ export async function POST(request, { params }) {
   }
 
   try {
-    const inquiryId = String(params?.id ?? "").trim();
-    if (!inquiryId) {
+    const inquiryKey = String(params?.id ?? "").trim();
+    if (!inquiryKey) {
       return json({ ok: false, error: "Inquiry id is required." }, { status: 400 });
     }
 
@@ -77,15 +119,12 @@ export async function POST(request, { params }) {
     }
 
     const db = getDb();
-    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(inquiryId);
-    const primarySnapshot = await primaryRef.get();
-    const docRef = primarySnapshot.exists
-      ? primaryRef
-      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(inquiryId);
-    const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
-    if (!snapshot.exists) {
+    const docRef = await resolveInquiryDocRef(db, inquiryKey);
+    if (!docRef) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
     }
+
+    const snapshot = await docRef.get();
 
     const data = snapshot.data() ?? {};
     const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
@@ -138,7 +177,7 @@ export async function POST(request, { params }) {
 
     return json({
       ok: true,
-      inquiry: toInquiryItem(inquiryId, nextData),
+      inquiry: toInquiryItem(snapshot.id, nextData),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update inquiry.";
@@ -153,21 +192,18 @@ export async function PATCH(request, { params }) {
   }
 
   try {
-    const inquiryId = String(params?.id ?? "").trim();
-    if (!inquiryId) {
+    const inquiryKey = String(params?.id ?? "").trim();
+    if (!inquiryKey) {
       return json({ ok: false, error: "Inquiry id is required." }, { status: 400 });
     }
 
     const db = getDb();
-    const primaryRef = db.collection(SUPPORT_CHAT_COLLECTION).doc(inquiryId);
-    const primarySnapshot = await primaryRef.get();
-    const docRef = primarySnapshot.exists
-      ? primaryRef
-      : db.collection(LEGACY_SUPPORT_CHAT_COLLECTION).doc(inquiryId);
-    const snapshot = primarySnapshot.exists ? primarySnapshot : await docRef.get();
-    if (!snapshot.exists) {
+    const docRef = await resolveInquiryDocRef(db, inquiryKey);
+    if (!docRef) {
       return json({ ok: false, error: "Ticket not found." }, { status: 404 });
     }
+
+    const snapshot = await docRef.get();
 
     const data = snapshot.data() ?? {};
     const timeoutCheck = maybeAppendHumanTimeoutNotice(data);
@@ -200,7 +236,7 @@ export async function PATCH(request, { params }) {
 
     return json({
       ok: true,
-      inquiry: toInquiryItem(inquiryId, nextData),
+      inquiry: toInquiryItem(snapshot.id, nextData),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update inquiry.";
