@@ -70,12 +70,13 @@ async function getAuthorizedAdmin(request) {
 
 function buildSupportSmsMessage({ customerName, requestReason, isNewTicket, wantsHumanSupport }) {
   const displayName = typeof customerName === "string" ? customerName.trim() : "";
+  const guestName = displayName || "Guest";
   const subject = displayName ? `${displayName} ` : "";
   const reason = typeof requestReason === "string" ? requestReason.trim() : "";
   const reasonSuffix = reason ? ` Reason: ${reason.slice(0, 140)}` : "";
 
   if (isNewTicket) {
-    return `Host alert: ${subject}started a new support chat.${reasonSuffix}`;
+    return `New FIFA X BTS support chat inquiry from ${guestName}. Miranda greeted ${guestName} in-app.`;
   }
 
   if (wantsHumanSupport) {

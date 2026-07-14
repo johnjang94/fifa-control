@@ -41,9 +41,13 @@ async function getInviteState() {
   ]);
   const capacity = settings.capacity;
   const inviteCount = snapshot.size;
-  const isFull = capacity !== null ? inviteCount >= capacity : false;
+  const registeredCount = snapshot.docs.reduce((count, doc) => {
+    const status = String(doc.data()?.status ?? "").trim().toLowerCase();
+    return status === "confirmed" ? count + 1 : count;
+  }, 0);
+  const isFull = capacity !== null ? registeredCount >= capacity : false;
 
-  return { inviteCount, capacity, isFull, snapshot };
+  return { inviteCount, registeredCount, capacity, isFull, snapshot };
 }
 
 async function generateUniqueBarcode(db) {
@@ -126,7 +130,6 @@ export async function POST(request) {
   try {
     const formData = await request.formData();
     const payload = await parseInvitePayload(formData);
-    const { isFull } = await getInviteState();
     const db = getDb();
     const barcode = await generateUniqueBarcode(db);
 
@@ -135,7 +138,7 @@ export async function POST(request) {
       barcode,
       createdAt: new Date(),
       source: "guest-home",
-      status: isFull ? "waitlist" : "confirmed",
+      status: "waitlist",
     });
 
     const invite = toInviteRequest(doc.id, {
@@ -143,7 +146,7 @@ export async function POST(request) {
       barcode,
       createdAt: new Date(),
       source: "guest-home",
-      status: isFull ? "waitlist" : "confirmed",
+      status: "waitlist",
     });
     const firstName = String(invite.firstName ?? "").trim();
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
@@ -197,7 +200,7 @@ export async function POST(request) {
       id: doc.id,
       qrToken: doc.id,
       barcode,
-      isWaitlist: isFull,
+      isWaitlist: true,
       notifications: {
         welcome: {
           ok: Boolean(welcomeResult.ok),
@@ -217,7 +220,7 @@ export async function POST(request) {
 }
 
 export async function GET(request) {
-  const { inviteCount, capacity, isFull, snapshot } = await getInviteState();
+  const { inviteCount, registeredCount, capacity, isFull, snapshot } = await getInviteState();
   const sessionCheck = await adminSessionMatches(request);
   const hasSessionHeader = Boolean(String(request.headers.get("x-admin-session-id") ?? "").trim());
 
@@ -229,6 +232,7 @@ export async function GET(request) {
     return json({
       ok: true,
       inviteCount,
+      registeredCount,
       capacity,
       isFull,
     });
@@ -237,6 +241,7 @@ export async function GET(request) {
   return json({
     ok: true,
     inviteCount,
+    registeredCount,
     capacity,
     isFull,
     invites: snapshot.docs
