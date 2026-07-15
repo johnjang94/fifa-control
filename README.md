@@ -9,7 +9,7 @@ For catch-up cleanup, call `POST /api/admin/maintenance/reconcile` with the admi
 It also exposes `/api/settings` for admin-managed invite capacity.
 Support chat tickets are stored in `support_chat_inquiries`, and Twilio SMS alerts can be enabled with `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, and `SUPPORT_ALERT_TO_NUMBER`.
 New guest registrations can notify the admin phone number with `ADMIN_ALERT_TO_NUMBER`.
-Admin login checks `admin_users` for `role: "admin"` and `active: true`.
+Admin login checks `admin_users` for `role: "manager"` or `role: "operator"` and `active: true`.
 Profile photos are stored in Firebase Storage. Set `FIREBASE_STORAGE_BUCKET` if you do not want to use the default `${FIREBASE_PROJECT_ID}.appspot.com` bucket.
 
 ## Local setup

@@ -55,6 +55,9 @@ export async function PUT(request) {
   if (!sessionCheck.ok) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
+  if (String(sessionCheck.session?.role ?? "manager").trim().toLowerCase() === "operator") {
+    return json({ ok: false, error: "Operator accounts cannot update capacity." }, { status: 403 });
+  }
 
   const payload = await request.json();
   const settings = await setInviteCapacity(getDb(), payload.capacity);

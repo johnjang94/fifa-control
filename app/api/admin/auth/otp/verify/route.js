@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 
 import { getDb } from "../../../../../../lib/firestore";
-import { createAdminSession, verifyAdminOtpChallenge } from "../../../../../../lib/admin";
+import {
+  buildOperatorLoginMessage,
+  createAdminSession,
+  listActiveAdminsByRole,
+  verifyAdminOtpChallenge,
+} from "../../../../../../lib/admin";
+import { sendTextSms } from "../../../../../../lib/sms";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -42,6 +48,23 @@ export async function POST(request) {
     }
 
     const session = await createAdminSession(db, verified.admin);
+
+    if (String(verified.admin?.role ?? "").trim().toLowerCase() === "operator") {
+      const managers = await listActiveAdminsByRole(db, "manager");
+      const managerPhones = [...new Set(managers.map((manager) => manager.phoneNumber).filter(Boolean))];
+      const message = buildOperatorLoginMessage(
+        [verified.admin?.firstName, verified.admin?.lastName].filter(Boolean).join(" ").trim(),
+      );
+
+      await Promise.allSettled(
+        managerPhones.map((to) =>
+          sendTextSms({
+            to,
+            message,
+          }),
+        ),
+      );
+    }
 
     return json({
       ok: true,

@@ -49,6 +49,9 @@ export async function POST(request) {
     if (!sessionCheck.ok) {
       return json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
+    if (String(sessionCheck.session?.role ?? "manager").trim().toLowerCase() === "operator") {
+      return json({ ok: false, error: "Operator accounts cannot accept waitlisted guests." }, { status: 403 });
+    }
 
     const payload = await request.json().catch(() => ({}));
     const inviteToken = String(payload?.inviteToken ?? "").trim();
