@@ -62,14 +62,31 @@ export async function GET(request) {
     return json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
+  const inviteToken = String(request.nextUrl.searchParams.get("inviteToken") ?? "").trim();
+  const phoneNumber = String(request.nextUrl.searchParams.get("phoneNumber") ?? "").trim();
+
   const snapshot = await getDb()
     .collection(COLLECTION)
     .orderBy("createdAt", "desc")
     .limit(200)
     .get();
 
+  const activities = snapshot.docs
+    .map((doc) => toActivityLog(doc.id, doc.data()))
+    .filter((activity) => {
+      if (inviteToken && String(activity.inviteToken ?? "").trim() !== inviteToken) {
+        return false;
+      }
+
+      if (phoneNumber && String(activity.phoneNumber ?? "").trim() !== phoneNumber) {
+        return false;
+      }
+
+      return true;
+    });
+
   return json({
     ok: true,
-    activities: snapshot.docs.map((doc) => toActivityLog(doc.id, doc.data())),
+    activities,
   });
 }
