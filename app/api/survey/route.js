@@ -5,7 +5,7 @@ import { toInviteRequest } from "../../../lib/invites";
 import { sendAdminSms } from "../../../lib/sms";
 
 const COLLECTION = "invite_requests";
-const ALLOWED_SOURCES = new Set(["Friends", "LinkedIn", "Eventbrite", "Instagram", "X"]);
+const ALLOWED_SOURCES = new Set(["Friends", "Eventbrite", "Instagram", "Volleyball", "Run Club"]);
 const ALLOWED_RESIDENT_VALUES = new Set(["Yes", "No"]);
 const SURVEY_COMPLETION_ADMIN_SMS_DELIVERY_STATUS = {
   SENT: "sent",
