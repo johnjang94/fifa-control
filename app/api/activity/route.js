@@ -30,6 +30,27 @@ async function adminSessionMatches(request) {
   return verifyAdminSession(getDb(), sessionId);
 }
 
+function parseCursor(rawCursor) {
+  const cursorValue = String(rawCursor ?? "").trim();
+  if (!cursorValue) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(cursorValue);
+    const createdAt = String(parsed?.createdAt ?? "").trim();
+    const id = String(parsed?.id ?? "").trim();
+
+    if (!createdAt || !id) {
+      return null;
+    }
+
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
 export function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
@@ -64,12 +85,21 @@ export async function GET(request) {
 
   const inviteToken = String(request.nextUrl.searchParams.get("inviteToken") ?? "").trim();
   const phoneNumber = String(request.nextUrl.searchParams.get("phoneNumber") ?? "").trim();
+  const cursor = parseCursor(request.nextUrl.searchParams.get("cursor"));
+  const limitRaw = Number(request.nextUrl.searchParams.get("limit") ?? "");
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 500) : 200;
 
-  const snapshot = await getDb()
-    .collection(COLLECTION)
-    .orderBy("createdAt", "desc")
-    .limit(200)
-    .get();
+  if (request.nextUrl.searchParams.has("cursor") && !cursor) {
+    return json({ ok: false, error: "Invalid cursor." }, { status: 400 });
+  }
+
+  let query = getDb().collection(COLLECTION).orderBy("createdAt", "desc");
+
+  if (cursor) {
+    query = query.startAfter(new Date(cursor.createdAt));
+  }
+
+  const snapshot = await query.limit(limit).get();
 
   const activities = snapshot.docs
     .map((doc) => toActivityLog(doc.id, doc.data()))
@@ -85,8 +115,17 @@ export async function GET(request) {
       return true;
     });
 
+  const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  const nextCursor = lastDoc
+    ? {
+        createdAt: toActivityLog(lastDoc.id, lastDoc.data()).createdAt,
+        id: lastDoc.id,
+      }
+    : null;
+
   return json({
     ok: true,
     activities,
+    nextCursor: snapshot.size === limit && lastDoc ? nextCursor : null,
   });
 }
