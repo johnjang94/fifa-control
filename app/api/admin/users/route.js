@@ -4,14 +4,24 @@ import { deleteInviteAndRelatedInquiries } from "../../../../lib/invite-deletion
 import { toInviteRequest } from "../../../../lib/invites";
 import { verifyAdminSession } from "../../../../lib/admin";
 
+const NAME_PATTERN = /^[A-Za-z]{2,}$/;
+const PHONE_PATTERN = /^\d{10}$/;
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-admin-session-id",
-  "Access-Control-Allow-Methods": "GET,DELETE,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
 };
 
 function json(body, init) {
   return NextResponse.json(body, { ...init, headers: { ...CORS_HEADERS, ...(init?.headers ?? {}) } });
+}
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizePhoneNumber(value) {
+  return normalizeString(value).replace(/\D/g, "");
 }
 
 async function adminSessionMatches(request) {
@@ -25,6 +35,102 @@ async function adminSessionMatches(request) {
 
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
+export async function POST(request) {
+  const sessionCheck = await adminSessionMatches(request);
+  if (!sessionCheck.ok) {
+    return json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const payload = await request.json().catch(() => ({}));
+    const firstName = normalizeString(payload?.firstName);
+    const lastName = normalizeString(payload?.lastName);
+    const phoneNumber = normalizePhoneNumber(payload?.phoneNumber);
+
+    if (!firstName || !lastName || !phoneNumber) {
+      return json(
+        { ok: false, error: "firstName, lastName, and phoneNumber are required." },
+        { status: 400 },
+      );
+    }
+
+    if (!NAME_PATTERN.test(firstName)) {
+      return json({ ok: false, error: "Please enter at least 2 letters for the first name." }, { status: 400 });
+    }
+
+    if (!NAME_PATTERN.test(lastName)) {
+      return json({ ok: false, error: "Please enter at least 2 letters for the last name." }, { status: 400 });
+    }
+
+    if (!PHONE_PATTERN.test(phoneNumber)) {
+      return json({ ok: false, error: "Please enter a 10-digit phone number." }, { status: 400 });
+    }
+
+    const db = getDb();
+    let barcode = String(payload?.barcode ?? "").trim();
+    if (!barcode) {
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const candidate = String(Math.floor(Math.random() * 100000)).padStart(5, "0");
+        const snapshot = await db
+          .collection("invite_requests")
+          .where("barcode", "==", candidate)
+          .limit(1)
+          .get();
+
+        if (snapshot.empty) {
+          barcode = candidate;
+          break;
+        }
+      }
+    } else {
+      const barcodeSnapshot = await db
+        .collection("invite_requests")
+        .where("barcode", "==", barcode)
+        .limit(1)
+        .get();
+
+      if (!barcodeSnapshot.empty) {
+        return json({ ok: false, error: "That barcode is already in use." }, { status: 409 });
+      }
+    }
+
+    if (!barcode) {
+      return json({ ok: false, error: "Unable to allocate a barcode. Please try again." }, { status: 400 });
+    }
+
+    const inviteRef = db.collection("invite_requests").doc();
+    const now = new Date();
+    const inviteData = {
+      firstName,
+      lastName,
+      phoneNumber,
+      barcode,
+      createdAt: now,
+      source: "admin-manual",
+      status: "confirmed",
+      attendance: "Going",
+      rsvp: "Going",
+      registeredAt: now,
+      acceptedToPartyAt: now,
+      updatedAt: now,
+      privacyPolicyAccepted: true,
+      privacyPolicyAcceptedAt: now,
+    };
+
+    await inviteRef.set(inviteData);
+
+    const snapshot = await inviteRef.get();
+    return json({
+      ok: true,
+      created: true,
+      user: toInviteRequest(snapshot.id, snapshot.data() ?? {}),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to create user.";
+    return json({ ok: false, error: message }, { status: 400 });
+  }
 }
 
 export async function GET(request) {
