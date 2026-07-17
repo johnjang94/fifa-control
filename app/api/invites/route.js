@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../lib/firestore";
 import { deleteInviteAndRelatedInquiries, findInviteRef } from "../../../lib/invite-deletion";
 import { buildWelcomeSmsMessage, parseInvitePayload, toInviteRequest } from "../../../lib/invites";
-import { getInviteSettings } from "../../../lib/settings";
 import { sendAdminSms, sendTextSms } from "../../../lib/sms";
 import { verifyAdminSession } from "../../../lib/admin";
 
@@ -31,23 +30,6 @@ async function adminSessionMatches(request) {
   }
 
   return verifyAdminSession(getDb(), sessionId);
-}
-
-async function getInviteState() {
-  const db = getDb();
-  const [snapshot, settings] = await Promise.all([
-    db.collection(COLLECTION).get(),
-    getInviteSettings(db),
-  ]);
-  const capacity = settings.capacity;
-  const inviteCount = snapshot.size;
-  const registeredCount = snapshot.docs.reduce((count, doc) => {
-    const status = String(doc.data()?.status ?? "").trim().toLowerCase();
-    return status === "confirmed" ? count + 1 : count;
-  }, 0);
-  const isFull = capacity !== null ? registeredCount >= capacity : false;
-
-  return { inviteCount, registeredCount, capacity, isFull, snapshot };
 }
 
 async function generateUniqueBarcode(db) {
@@ -92,11 +74,7 @@ function buildRsvpSmsMessage(firstName, rsvp) {
   return "";
 }
 
-function buildReturnToGoingSmsMessage(firstName, isFull) {
-  if (isFull) {
-    return `Hi ${firstName}, we are glad to hear that you have decided to be with us in the end. We are sorry to tell you this, but it seems like we might need to get back to you for your spot. please stay tuned!`;
-  }
-
+function buildReturnToGoingSmsMessage(firstName) {
   return `Hi ${firstName}, glad to have you back!`;
 }
 
@@ -220,7 +198,6 @@ export async function POST(request) {
 }
 
 export async function GET(request) {
-  const { inviteCount, registeredCount, capacity, isFull, snapshot } = await getInviteState();
   const sessionCheck = await adminSessionMatches(request);
   const hasSessionHeader = Boolean(String(request.headers.get("x-admin-session-id") ?? "").trim());
 
@@ -229,21 +206,13 @@ export async function GET(request) {
   }
 
   if (!sessionCheck.ok) {
-    return json({
-      ok: true,
-      inviteCount,
-      registeredCount,
-      capacity,
-      isFull,
-    });
+    return json({ ok: true });
   }
+
+  const snapshot = await getDb().collection(COLLECTION).get();
 
   return json({
     ok: true,
-    inviteCount,
-    registeredCount,
-    capacity,
-    isFull,
     invites: snapshot.docs
       .slice()
       .sort((a, b) => {
@@ -295,9 +264,7 @@ export async function PATCH(request) {
           ? "rsvpSmsSentAtNotGoing"
           : "";
     const message = firstName ? buildRsvpSmsMessage(firstName, rsvp) : "";
-    const returnToGoingMessage = firstName
-      ? buildReturnToGoingSmsMessage(firstName, (await getInviteState()).isFull)
-      : "";
+    const returnToGoingMessage = firstName ? buildReturnToGoingSmsMessage(firstName) : "";
     const returnToGoingSentField = "rsvpSmsSentAtGoingReturn";
     const shouldSendSms =
       (Boolean(sentField) && Boolean(message) && !beforeData?.[sentField]) ||
