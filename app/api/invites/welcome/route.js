@@ -53,6 +53,7 @@ export async function POST(request) {
     const invite = toInviteRequest(snapshot.id, snapshot.data() ?? {});
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
     const firstName = String(invite.firstName ?? "").trim();
+    const barcode = String(invite.barcode ?? "").trim();
     const sentAt = snapshot.data()?.welcomeSmsSentAt ?? null;
 
     if (!phoneNumber || !firstName) {
@@ -67,7 +68,7 @@ export async function POST(request) {
       });
     }
 
-    const message = buildWelcomeSmsMessage(firstName);
+    const message = buildWelcomeSmsMessage(firstName, barcode);
     const result = await sendTextSms({ to: phoneNumber, message });
     const deliveryStatus = result.ok
       ? WELCOME_SMS_DELIVERY_STATUS.SENT

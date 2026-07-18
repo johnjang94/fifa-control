@@ -78,9 +78,9 @@ function buildReturnToGoingSmsMessage(firstName) {
   return `Hi ${firstName}, glad to have you back!`;
 }
 
-function getInviteNotificationMessages(firstName) {
+function getInviteNotificationMessages(firstName, barcode) {
   return {
-    welcome: buildWelcomeSmsMessage(firstName),
+    welcome: buildWelcomeSmsMessage(firstName, barcode),
     admin: `${firstName} has signed up for FIFA Final X BTS Half-Time Show Watchy Party.`,
   };
 }
@@ -129,7 +129,7 @@ export async function POST(request) {
     const firstName = String(invite.firstName ?? "").trim();
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
 
-    const notificationMessages = getInviteNotificationMessages(firstName);
+    const notificationMessages = getInviteNotificationMessages(firstName, barcode);
     const notificationResults = await Promise.allSettled([
       phoneNumber
         ? sendTextSms({

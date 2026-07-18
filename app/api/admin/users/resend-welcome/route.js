@@ -66,12 +66,13 @@ export async function POST(request) {
     const invite = toInviteRequest(snapshot.id, snapshot.data() ?? {});
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
     const firstName = String(invite.firstName ?? "").trim();
+    const barcode = String(invite.barcode ?? "").trim();
 
     if (!phoneNumber || !firstName) {
       return json({ ok: false, error: "Invite is missing contact information." }, { status: 400 });
     }
 
-    const message = buildWelcomeSmsMessage(firstName);
+    const message = buildWelcomeSmsMessage(firstName, barcode);
     const result = await sendTextSms({ to: phoneNumber, message });
     const deliveryStatus = result.ok
       ? WELCOME_SMS_DELIVERY_STATUS.SENT
