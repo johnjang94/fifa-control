@@ -89,7 +89,7 @@ export async function POST(request) {
     const invite = toInviteRequest(snapshot.id, beforeData);
     const firstName = String(invite.firstName ?? "").trim() || "there";
     const phoneNumber = String(invite.phoneNumber ?? "").replace(/\D/g, "");
-    const message = `Hi ${firstName}, we are fro FIFA Final X BTS Half-Time Show Watch Party. Congrats! We are pleased to have you with us! Please come to the following website and get more information about the party: https://fifa-half-time-show.vercel.app/`;
+    const message = `Hi ${firstName}, we are from FIFA Final X BTS Half-Time Show Watch Party. Congrats! We are pleased to have you with us! Please come to the following website and get more information about the party: https://fifa-half-time-show.vercel.app/`;
 
     await docRef.set(
       {
